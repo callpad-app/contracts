@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -14,6 +13,7 @@ import {LibClone} from "solady/utils/LibClone.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {Hook} from "./Hook.sol";
 import {Proofs} from "./Proofs.sol";
 import {Token} from "./Token.sol";
 
@@ -38,14 +38,14 @@ struct Handle {
 
 contract Launchpad is EIP712, Ownable, SafeCallback {
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
-    uint24 public constant POOL_FEE = 10_000;
     int24 public constant TICK_SPACING = 200;
     uint256 internal constant BPS = 10_000;
 
     address public immutable usd;
-    IHooks public immutable hook;
+    Hook public immutable hook;
     address public immutable tokenImplementation = address(new Token());
     address public proofSigner;
+    address public treasury;
     uint256 public auctionDuration = 24 hours;
     uint256 public auctionExtension = 5 minutes;
     uint256 public auctionMinBidIncrementBps = 1000;
@@ -54,6 +54,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     mapping(bytes32 handleId => Handle) public handles;
 
     event ProofSignerUpdated(address proofSigner);
+    event TreasuryUpdated(address treasury);
     event AuctionSettingsUpdated(uint256 auctionDuration, uint256 auctionExtension, uint256 auctionMinBidIncrementBps);
     event LaunchSettingsUpdated(uint256 airdropBps, int24 startTick);
     event AuctionStarted(bytes32 indexed handleId, address indexed token, string name, string symbol);
@@ -74,10 +75,11 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     error NotLaunched();
     error NothingToClaim();
 
-    constructor(address proofSigner_, address usd_, IPoolManager poolManager_, IHooks hook_)
+    constructor(address proofSigner_, address treasury_, address usd_, IPoolManager poolManager_, Hook hook_)
         SafeCallback(poolManager_)
     {
         proofSigner = proofSigner_;
+        treasury = treasury_;
         usd = usd_;
         hook = hook_;
         _initializeOwner(msg.sender);
@@ -86,6 +88,11 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     function setProofSigner(address proofSigner_) external onlyOwner {
         proofSigner = proofSigner_;
         emit ProofSignerUpdated(proofSigner_);
+    }
+
+    function setTreasury(address treasury_) external onlyOwner {
+        treasury = treasury_;
+        emit TreasuryUpdated(treasury_);
     }
 
     function setAuctionSettings(uint256 auctionDuration_, uint256 auctionExtension_, uint256 auctionMinBidIncrementBps_)
@@ -148,7 +155,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         uint256 endTime = auction.endTime;
         require(endTime != 0 && block.timestamp >= endTime, AuctionNotEnded());
 
-        token = _launch(handle, handleId, auction.name, auction.symbol, auction.salt, auction.highestBidder);
+        token = _launch(handle, handleId, auction.name, auction.symbol, auction.salt, auction.highestBidder, address(0));
     }
 
     function launchOwn(
@@ -172,7 +179,21 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
             _cancelAuction(handleId);
         }
 
-        token = _launch(handle, handleId, name, symbol, salt, msg.sender);
+        token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender);
+    }
+
+    function setAccount(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
+        Proofs.verify(
+            proofSigner,
+            _hashTypedData(Proofs.setAccountHash(handleId, msg.sender, proofDeadline)),
+            proofDeadline,
+            proof
+        );
+
+        address token = handles[handleId].token;
+        require(token != address(0), NotLaunched());
+
+        hook.setAccount(token, msg.sender);
     }
 
     function claimPrebuy(bytes32 handleId) external returns (uint256 tokens) {
@@ -254,13 +275,15 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         string memory name,
         string memory symbol,
         bytes32 salt,
-        address launcher
+        address launcher,
+        address account
     ) internal returns (address token) {
         require(handle.token == address(0), AlreadyLaunched());
 
         token = predictToken(handleId, salt);
         LibClone.cloneDeterministic(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         Token(token).initialize(name, symbol, TOKEN_SUPPLY);
+        hook.register(token, launcher, account);
 
         uint256 airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
         handle.token = token;
@@ -278,7 +301,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(usd),
             currency1: Currency.wrap(token),
-            fee: POOL_FEE,
+            fee: 0,
             tickSpacing: TICK_SPACING,
             hooks: hook
         });
