@@ -1,15 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {EIP712} from "solady/utils/EIP712.sol";
+import {LibClone} from "solady/utils/LibClone.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {Proofs} from "./Proofs.sol";
 import {Token} from "./Token.sol";
 
 struct Auction {
     string name;
     string symbol;
+    bytes32 salt;
     address highestBidder;
     uint256 highestBid;
     uint256 endTime;
@@ -22,22 +33,30 @@ struct Handle {
     mapping(address buyer => uint256 amount) prebuys;
     uint256 totalPrebuy;
     uint256 prebuyTokens;
+    uint256 airdropTokens;
 }
 
-contract Launchpad is EIP712, Ownable {
+contract Launchpad is EIP712, Ownable, SafeCallback {
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
+    uint24 public constant POOL_FEE = 10_000;
+    int24 public constant TICK_SPACING = 200;
     uint256 internal constant BPS = 10_000;
 
     address public immutable usd;
+    IHooks public immutable hook;
+    address public immutable tokenImplementation = address(new Token());
     address public proofSigner;
     uint256 public auctionDuration = 24 hours;
     uint256 public auctionExtension = 5 minutes;
     uint256 public auctionMinBidIncrementBps = 1000;
+    uint256 public airdropBps = 500;
+    int24 public startTick = 391_400;
     mapping(bytes32 handleId => Handle) public handles;
 
     event ProofSignerUpdated(address proofSigner);
     event AuctionSettingsUpdated(uint256 auctionDuration, uint256 auctionExtension, uint256 auctionMinBidIncrementBps);
-    event AuctionStarted(bytes32 indexed handleId, string name, string symbol);
+    event LaunchSettingsUpdated(uint256 airdropBps, int24 startTick);
+    event AuctionStarted(bytes32 indexed handleId, address indexed token, string name, string symbol);
     event BidPlaced(bytes32 indexed handleId, address indexed bidder, uint256 amount, uint256 endTime);
     event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
     event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
@@ -50,10 +69,14 @@ contract Launchpad is EIP712, Ownable {
     error AuctionNotActive();
     error AuctionNotEnded();
     error BidTooLow(uint256 minBid);
+    error InvalidSalt();
 
-    constructor(address proofSigner_, address usd_) {
+    constructor(address proofSigner_, address usd_, IPoolManager poolManager_, IHooks hook_)
+        SafeCallback(poolManager_)
+    {
         proofSigner = proofSigner_;
         usd = usd_;
+        hook = hook_;
         _initializeOwner(msg.sender);
     }
 
@@ -72,9 +95,16 @@ contract Launchpad is EIP712, Ownable {
         emit AuctionSettingsUpdated(auctionDuration_, auctionExtension_, auctionMinBidIncrementBps_);
     }
 
+    function setLaunchSettings(uint256 airdropBps_, int24 startTick_) external onlyOwner {
+        airdropBps = airdropBps_;
+        startTick = startTick_;
+        emit LaunchSettingsUpdated(airdropBps_, startTick_);
+    }
+
     function startAuction(
         string calldata name,
         string calldata symbol,
+        bytes32 salt,
         uint256 amount,
         uint256 proofDeadline,
         bytes calldata proof
@@ -89,7 +119,7 @@ contract Launchpad is EIP712, Ownable {
         handleId = keccak256(bytes(symbol));
         require(handles[handleId].token == address(0), AlreadyLaunched());
 
-        _startAuction(handleId, name, symbol);
+        _startAuction(handleId, name, symbol, salt);
         _bidAuction(handleId, amount);
     }
 
@@ -115,13 +145,16 @@ contract Launchpad is EIP712, Ownable {
         uint256 endTime = auction.endTime;
         require(endTime != 0 && block.timestamp >= endTime, AuctionNotEnded());
 
-        token = _launch(handle, handleId, auction.name, auction.symbol, auction.highestBidder);
+        token = _launch(handle, handleId, auction.name, auction.symbol, auction.salt, auction.highestBidder);
     }
 
-    function launchOwn(string calldata name, string calldata symbol, uint256 proofDeadline, bytes calldata proof)
-        external
-        returns (address token)
-    {
+    function launchOwn(
+        string calldata name,
+        string calldata symbol,
+        bytes32 salt,
+        uint256 proofDeadline,
+        bytes calldata proof
+    ) external returns (address token) {
         Proofs.verify(
             proofSigner,
             _hashTypedData(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline)),
@@ -131,24 +164,35 @@ contract Launchpad is EIP712, Ownable {
 
         bytes32 handleId = keccak256(bytes(symbol));
         Handle storage handle = handles[handleId];
-        if (handle.auction.endTime != 0) _cancelAuction(handleId);
+        if (handle.auction.endTime != 0) {
+            salt = handle.auction.salt;
+            _cancelAuction(handleId);
+        }
 
-        token = _launch(handle, handleId, name, symbol, msg.sender);
+        token = _launch(handle, handleId, name, symbol, salt, msg.sender);
     }
 
     function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
         return handles[handleId].prebuys[buyer];
     }
 
-    function _startAuction(bytes32 handleId, string calldata name, string calldata symbol) internal {
+    function predictToken(bytes32 handleId, bytes32 salt) public view returns (address token) {
+        token = LibClone.predictDeterministicAddress(
+            tokenImplementation, keccak256(abi.encode(handleId, salt)), address(this)
+        );
+        require(token > usd, InvalidSalt());
+    }
+
+    function _startAuction(bytes32 handleId, string calldata name, string calldata symbol, bytes32 salt) internal {
         Auction storage auction = handles[handleId].auction;
         require(auction.endTime == 0, AuctionAlreadyExists());
 
         auction.name = name;
         auction.symbol = symbol;
+        auction.salt = salt;
         auction.endTime = block.timestamp + auctionDuration;
 
-        emit AuctionStarted(handleId, name, symbol);
+        emit AuctionStarted(handleId, predictToken(handleId, salt), name, symbol);
     }
 
     function _bidAuction(bytes32 handleId, uint256 amount) internal {
@@ -191,15 +235,81 @@ contract Launchpad is EIP712, Ownable {
         bytes32 handleId,
         string memory name,
         string memory symbol,
+        bytes32 salt,
         address launcher
     ) internal returns (address token) {
         require(handle.token == address(0), AlreadyLaunched());
 
-        token = address(new Token(name, symbol, TOKEN_SUPPLY));
+        token = predictToken(handleId, salt);
+        LibClone.cloneDeterministic(tokenImplementation, keccak256(abi.encode(handleId, salt)));
+        Token(token).initialize(name, symbol, TOKEN_SUPPLY);
+
+        uint256 airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
         handle.token = token;
         handle.launcher = launcher;
+        handle.airdropTokens = airdropTokens;
+        handle.prebuyTokens = _provideLiquidity(token, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy);
 
         emit Launched(handleId, token, launcher, name, symbol);
+    }
+
+    function _provideLiquidity(address token, uint256 liquidityTokens, uint256 prebuyUsd)
+        internal
+        returns (uint256 prebuyTokens)
+    {
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(usd),
+            currency1: Currency.wrap(token),
+            fee: POOL_FEE,
+            tickSpacing: TICK_SPACING,
+            hooks: hook
+        });
+        int24 tick = startTick;
+        poolManager.initialize(key, TickMath.getSqrtPriceAtTick(tick));
+
+        return abi.decode(poolManager.unlock(abi.encode(key, tick, liquidityTokens, prebuyUsd)), (uint256));
+    }
+
+    function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
+        (PoolKey memory key, int24 tick, uint256 liquidityTokens, uint256 prebuyUsd) =
+            abi.decode(data, (PoolKey, int24, uint256, uint256));
+
+        int24 tickLower = TickMath.minUsableTick(TICK_SPACING);
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount1(
+            TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tick), liquidityTokens
+        );
+        (BalanceDelta liquidityDelta,) = poolManager.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({
+                tickLower: tickLower, tickUpper: tick, liquidityDelta: int256(uint256(liquidity)), salt: 0
+            }),
+            ""
+        );
+        uint256 owedTokens = uint128(-liquidityDelta.amount1());
+
+        uint256 prebuyTokens;
+        if (prebuyUsd != 0) {
+            BalanceDelta swapDelta = poolManager.swap(
+                key,
+                SwapParams({
+                    zeroForOne: true,
+                    amountSpecified: -int256(prebuyUsd),
+                    sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                }),
+                ""
+            );
+            _settle(key.currency0, uint128(-swapDelta.amount0()));
+            prebuyTokens = uint128(swapDelta.amount1());
+        }
+        _settle(key.currency1, owedTokens - prebuyTokens);
+
+        return abi.encode(prebuyTokens);
+    }
+
+    function _settle(Currency currency, uint256 amount) internal {
+        poolManager.sync(currency);
+        SafeTransferLib.safeTransfer(Currency.unwrap(currency), address(poolManager), amount);
+        poolManager.settle();
     }
 
     function _domainNameAndVersion() internal pure override returns (string memory, string memory) {
