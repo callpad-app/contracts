@@ -19,6 +19,9 @@ struct Handle {
     Auction auction;
     address token;
     address launcher;
+    mapping(address buyer => uint256 amount) prebuys;
+    uint256 totalPrebuy;
+    uint256 prebuyTokens;
 }
 
 contract Launchpad is EIP712, Ownable {
@@ -37,6 +40,7 @@ contract Launchpad is EIP712, Ownable {
     event AuctionStarted(bytes32 indexed handleId, string name, string symbol);
     event BidPlaced(bytes32 indexed handleId, address indexed bidder, uint256 amount, uint256 endTime);
     event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
+    event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
     event Launched(
         bytes32 indexed handleId, address indexed token, address indexed launcher, string name, string symbol
     );
@@ -93,6 +97,18 @@ contract Launchpad is EIP712, Ownable {
         _bidAuction(handleId, amount);
     }
 
+    function prebuy(bytes32 handleId, uint256 amount) external {
+        Handle storage handle = handles[handleId];
+        require(block.timestamp < handle.auction.endTime, AuctionNotActive());
+
+        handle.prebuys[msg.sender] += amount;
+        handle.totalPrebuy += amount;
+
+        emit Prebought(handleId, msg.sender, amount);
+
+        SafeTransferLib.safeTransferFrom(usd, msg.sender, address(this), amount);
+    }
+
     function launch(bytes32 handleId) external returns (address token) {
         Handle storage handle = handles[handleId];
         Auction storage auction = handle.auction;
@@ -118,6 +134,10 @@ contract Launchpad is EIP712, Ownable {
         if (handle.auction.endTime != 0) _cancelAuction(handleId);
 
         token = _launch(handle, handleId, name, symbol, msg.sender);
+    }
+
+    function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
+        return handles[handleId].prebuys[buyer];
     }
 
     function _startAuction(bytes32 handleId, string calldata name, string calldata symbol) internal {
