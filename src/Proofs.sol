@@ -6,6 +6,8 @@ import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
 library Proofs {
     bytes32 internal constant START_AUCTION_TYPEHASH =
         keccak256("StartAuction(string name,string symbol,uint256 bid,uint256 proofDeadline)");
+    bytes32 internal constant LAUNCH_OWN_TYPEHASH =
+        keccak256("LaunchOwn(string name,string symbol,address owner,uint256 proofDeadline)");
 
     error InvalidProof();
     error ProofExpired();
@@ -17,6 +19,16 @@ library Proofs {
     {
         return keccak256(
             abi.encode(START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), bid, proofDeadline)
+        );
+    }
+
+    function launchOwnHash(string calldata name, string calldata symbol, address owner, uint256 proofDeadline)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(LAUNCH_OWN_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), owner, proofDeadline)
         );
     }
 

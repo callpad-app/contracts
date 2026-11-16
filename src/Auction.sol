@@ -16,6 +16,7 @@ library Auction {
 
     event AuctionStarted(bytes32 indexed auctionId, string name, string symbol);
     event BidPlaced(bytes32 indexed auctionId, address indexed bidder, uint256 amount, uint256 endTime);
+    event AuctionCancelled(bytes32 indexed auctionId, address indexed bidder, uint256 refund);
 
     error BidTooLow(uint256 minBid);
     error AuctionAlreadyExists();
@@ -66,5 +67,16 @@ library Auction {
 
         SafeTransferLib.safeTransferFrom(usd, msg.sender, address(this), amount);
         if (previousBid != 0) SafeTransferLib.safeTransfer(usd, previousBidder, previousBid);
+    }
+
+    function cancel(mapping(bytes32 auctionId => State) storage auctions, address usd, bytes32 auctionId) internal {
+        State storage auction = auctions[auctionId];
+        address bidder = auction.highestBidder;
+        uint256 refund = auction.highestBid;
+        delete auctions[auctionId];
+
+        emit AuctionCancelled(auctionId, bidder, refund);
+
+        SafeTransferLib.safeTransfer(usd, bidder, refund);
     }
 }

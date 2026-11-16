@@ -7,6 +7,7 @@ import {MockERC20} from "solady/../test/utils/mocks/MockERC20.sol";
 import {Auction} from "../src/Auction.sol";
 import {Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
+import {Token} from "../src/Token.sol";
 
 contract LaunchpadTest is Test {
     string constant NAME = "vitalik.eth";
@@ -20,6 +21,7 @@ contract LaunchpadTest is Test {
     uint256 proofDeadline = block.timestamp + 1 hours;
     address alice = makeAddr("alice");
     address bob = makeAddr("bob");
+    address owner = makeAddr("owner");
     bytes32 auctionId = keccak256(bytes(SYMBOL));
 
     function setUp() public {
@@ -37,11 +39,7 @@ contract LaunchpadTest is Test {
         usd.approve(address(launchpad), type(uint256).max);
     }
 
-    function sign(uint256 key, string memory name, string memory symbol, uint256 bid, uint256 deadline)
-        internal
-        view
-        returns (bytes memory)
-    {
+    function signStruct(uint256 key, bytes32 structHash) internal view returns (bytes memory) {
         bytes32 domainSeparator = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -51,12 +49,39 @@ contract LaunchpadTest is Test {
                 address(launchpad)
             )
         );
-        bytes32 structHash = keccak256(
-            abi.encode(Proofs.START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), bid, deadline)
-        );
         (uint8 v, bytes32 r, bytes32 s) =
             vm.sign(key, keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash)));
         return abi.encodePacked(r, s, v);
+    }
+
+    function sign(uint256 key, string memory name, string memory symbol, uint256 bid, uint256 deadline)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return signStruct(
+            key,
+            keccak256(
+                abi.encode(
+                    Proofs.START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), bid, deadline
+                )
+            )
+        );
+    }
+
+    function signLaunchOwn(uint256 key, string memory name, string memory symbol, address wallet, uint256 deadline)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return signStruct(
+            key,
+            keccak256(
+                abi.encode(
+                    Proofs.LAUNCH_OWN_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), wallet, deadline
+                )
+            )
+        );
     }
 
     function startAuction(uint256 amount) internal {
@@ -267,6 +292,179 @@ contract LaunchpadTest is Test {
 
         bytes memory proof = sign(newProofSignerKey, NAME, SYMBOL, FIRST_BID, proofDeadline);
         vm.prank(alice);
+        launchpad.startAuction(NAME, SYMBOL, FIRST_BID, proofDeadline, proof);
+    }
+
+    function test_LaunchCreatesTokenFromAuctionProfile() public {
+        startAuction(FIRST_BID);
+        skip(24 hours);
+
+        vm.prank(bob);
+        Token token = Token(launchpad.launch(auctionId));
+
+        assertEq(launchpad.tokens(auctionId), address(token));
+        assertEq(token.name(), NAME);
+        assertEq(token.symbol(), SYMBOL);
+        assertEq(token.totalSupply(), launchpad.TOKEN_SUPPLY());
+        assertEq(token.balanceOf(address(launchpad)), launchpad.TOKEN_SUPPLY());
+    }
+
+    function test_LaunchEmitsWinnerAsLauncher() public {
+        startAuction(FIRST_BID);
+        vm.prank(bob);
+        launchpad.bid(auctionId, 200e6);
+        skip(24 hours);
+
+        vm.expectEmit(true, false, true, true);
+        emit Launchpad.Launched(auctionId, address(0), bob, NAME, SYMBOL);
+        launchpad.launch(auctionId);
+    }
+
+    function test_LaunchRevertsWhenAuctionStillActive() public {
+        startAuction(FIRST_BID);
+        skip(24 hours - 1);
+
+        vm.expectRevert(Launchpad.AuctionNotEnded.selector);
+        launchpad.launch(auctionId);
+    }
+
+    function test_LaunchRevertsWhenAuctionDoesNotExist() public {
+        vm.expectRevert(Launchpad.AuctionNotEnded.selector);
+        launchpad.launch(auctionId);
+    }
+
+    function test_LaunchRevertsWhenAlreadyLaunched() public {
+        startAuction(FIRST_BID);
+        skip(24 hours);
+        launchpad.launch(auctionId);
+
+        vm.expectRevert(Launchpad.AlreadyLaunched.selector);
+        launchpad.launch(auctionId);
+    }
+
+    function test_LaunchOwnCreatesTokenWithoutAuction() public {
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, alice, proofDeadline);
+
+        vm.expectEmit(true, false, true, true);
+        emit Launchpad.Launched(auctionId, address(0), alice, NAME, SYMBOL);
+        vm.prank(alice);
+        Token token = Token(launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof));
+
+        assertEq(launchpad.tokens(auctionId), address(token));
+        assertEq(token.name(), NAME);
+        assertEq(token.symbol(), SYMBOL);
+        assertEq(token.balanceOf(address(launchpad)), launchpad.TOKEN_SUPPLY());
+    }
+
+    function test_LaunchOwnRevertsWhenCallerIsNotProvenOwner() public {
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, alice, proofDeadline);
+
+        vm.prank(bob);
+        vm.expectRevert(Proofs.InvalidProof.selector);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+    }
+
+    function test_LaunchOwnRevertsWhenProofSignedByStranger() public {
+        (, uint256 strangerKey) = makeAddrAndKey("stranger");
+        bytes memory proof = signLaunchOwn(strangerKey, NAME, SYMBOL, alice, proofDeadline);
+
+        vm.prank(alice);
+        vm.expectRevert(Proofs.InvalidProof.selector);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+    }
+
+    function test_LaunchOwnRevertsWhenGivenStartAuctionProof() public {
+        bytes memory proof = sign(proofSignerKey, NAME, SYMBOL, uint256(uint160(alice)), proofDeadline);
+
+        vm.prank(alice);
+        vm.expectRevert(Proofs.InvalidProof.selector);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+    }
+
+    function test_LaunchOwnRevertsWhenProofExpired() public {
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, alice, proofDeadline);
+        vm.warp(proofDeadline + 1);
+
+        vm.prank(alice);
+        vm.expectRevert(Proofs.ProofExpired.selector);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+    }
+
+    function test_LaunchOwnDuringAuctionRefundsHighestBidder() public {
+        startAuction(FIRST_BID);
+        vm.prank(bob);
+        launchpad.bid(auctionId, 200e6);
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, owner, proofDeadline);
+
+        vm.expectEmit();
+        emit Auction.AuctionCancelled(auctionId, bob, 200e6);
+        vm.prank(owner);
+        address token = launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+
+        assertEq(launchpad.tokens(auctionId), token);
+        assertEq(usd.balanceOf(alice), INITIAL_BALANCE);
+        assertEq(usd.balanceOf(bob), INITIAL_BALANCE);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+        (,, address highestBidder, uint256 highestBid, uint256 endTime) = launchpad.auctions(auctionId);
+        assertEq(highestBidder, address(0));
+        assertEq(highestBid, 0);
+        assertEq(endTime, 0);
+    }
+
+    function test_LaunchOwnAfterAuctionEndedRefundsWinner() public {
+        startAuction(FIRST_BID);
+        skip(24 hours);
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, owner, block.timestamp);
+
+        vm.prank(owner);
+        launchpad.launchOwn(NAME, SYMBOL, block.timestamp, proof);
+
+        assertEq(usd.balanceOf(alice), INITIAL_BALANCE);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+    }
+
+    function test_BidRevertsAfterOwnerCancelledAuction() public {
+        startAuction(FIRST_BID);
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, owner, proofDeadline);
+        vm.prank(owner);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+
+        vm.prank(bob);
+        vm.expectRevert(Auction.AuctionNotActive.selector);
+        launchpad.bid(auctionId, 200e6);
+    }
+
+    function test_LaunchOwnRevertsWhenAuctionWinnerAlreadyLaunched() public {
+        startAuction(FIRST_BID);
+        skip(24 hours);
+        launchpad.launch(auctionId);
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, owner, block.timestamp);
+
+        vm.prank(owner);
+        vm.expectRevert(Launchpad.AlreadyLaunched.selector);
+        launchpad.launchOwn(NAME, SYMBOL, block.timestamp, proof);
+
+        assertEq(usd.balanceOf(address(launchpad)), FIRST_BID);
+    }
+
+    function test_LaunchOwnRevertsWhenAlreadyLaunched() public {
+        bytes memory proof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, alice, proofDeadline);
+        vm.prank(alice);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+
+        vm.prank(alice);
+        vm.expectRevert(Launchpad.AlreadyLaunched.selector);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, proof);
+    }
+
+    function test_StartAuctionRevertsWhenOwnerAlreadyLaunched() public {
+        bytes memory ownProof = signLaunchOwn(proofSignerKey, NAME, SYMBOL, alice, proofDeadline);
+        vm.prank(alice);
+        launchpad.launchOwn(NAME, SYMBOL, proofDeadline, ownProof);
+
+        bytes memory proof = sign(proofSignerKey, NAME, SYMBOL, FIRST_BID, proofDeadline);
+        vm.prank(bob);
+        vm.expectRevert(Launchpad.AlreadyLaunched.selector);
         launchpad.startAuction(NAME, SYMBOL, FIRST_BID, proofDeadline, proof);
     }
 }
