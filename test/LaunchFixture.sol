@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -10,6 +11,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 import {ERC20} from "solady/tokens/ERC20.sol";
 import {MockERC20} from "../lib/solady/test/utils/mocks/MockERC20.sol";
 import {Hook} from "../src/Hook.sol";
@@ -17,6 +19,8 @@ import {Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 
 abstract contract LaunchFixture is Test {
+    using StateLibrary for IPoolManager;
+
     uint256 internal constant PROOF_SIGNER_KEY = 1;
     uint256 internal constant BID = 10e6;
     uint256 internal constant PREBUY = 1000e6;
@@ -72,6 +76,7 @@ abstract contract LaunchFixture is Test {
         returns (int256 usdDelta, int256 tokenDelta, uint256 fee)
     {
         uint256 usdFeesBefore = _usdFees();
+        vm.recordLogs();
         BalanceDelta delta = router.swap(
             key,
             SwapParams({
@@ -84,7 +89,18 @@ abstract contract LaunchFixture is Test {
         );
 
         assertEq(_tokenFees(), 0);
-        return (delta.amount0(), delta.amount1(), _usdFees() - usdFeesBefore);
+        (usdDelta, tokenDelta, fee) = (delta.amount0(), delta.amount1(), _usdFees() - usdFeesBefore);
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
+        assertEq(_swappedData(), abi.encode(usdDelta, tokenDelta, fee, sqrtPriceX96));
+    }
+
+    function _swappedData() internal returns (bytes memory data) {
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i; i < logs.length; ++i) {
+            if (logs[i].topics[0] != Hook.Swapped.selector) continue;
+            assertEq(logs[i].topics[1], bytes32(uint256(uint160(token))));
+            data = logs[i].data;
+        }
     }
 
     function _usdFees() internal view returns (uint256) {

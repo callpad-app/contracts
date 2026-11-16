@@ -4,18 +4,19 @@ pragma solidity ^0.8.30;
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {BaseHook} from "uniswap-hooks/base/BaseHook.sol";
-import {IHookEvents} from "uniswap-hooks/interfaces/IHookEvents.sol";
 import {Launchpad} from "./Launchpad.sol";
 
-contract Hook is BaseHook, IHookEvents {
+contract Hook is BaseHook {
+    using StateLibrary for IPoolManager;
+
     struct Recipients {
         address creator;
         address account;
@@ -34,6 +35,7 @@ contract Hook is BaseHook, IHookEvents {
 
     event AccountSet(address indexed token, address indexed account);
     event FeesTaken(address indexed recipient, uint256 amount);
+    event Swapped(address indexed token, int256 usdAmount, int256 tokenAmount, uint256 fee, uint160 sqrtPriceX96);
 
     error AccountAlreadySet();
     error NotLaunchpad();
@@ -95,24 +97,33 @@ contract Hook is BaseHook, IHookEvents {
         return this.beforeInitialize.selector;
     }
 
-    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         int128 fee;
-        if (_isUsdSpecified(params)) fee = _takeUsdFee(sender, key, params.amountSpecified);
+        if (_isUsdSpecified(params)) fee = _takeUsdFee(key, params.amountSpecified);
         return (this.beforeSwap.selector, toBeforeSwapDelta(fee, 0), 0);
     }
 
-    function _afterSwap(
-        address sender,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta,
-        bytes calldata
-    ) internal override returns (bytes4, int128 fee) {
-        if (!_isUsdSpecified(params)) fee = _takeUsdFee(sender, key, delta.amount0());
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
+        internal
+        override
+        returns (bytes4, int128 fee)
+    {
+        int128 usdFee;
+        if (_isUsdSpecified(params)) usdFee = _usdFee(params.amountSpecified);
+        else fee = usdFee = _takeUsdFee(key, delta.amount0());
+
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
+        emit Swapped(
+            Currency.unwrap(key.currency1),
+            int256(delta.amount0()) - usdFee,
+            delta.amount1(),
+            uint128(usdFee),
+            sqrtPriceX96
+        );
         return (this.afterSwap.selector, fee);
     }
 
@@ -120,9 +131,9 @@ contract Hook is BaseHook, IHookEvents {
         return params.zeroForOne == (params.amountSpecified < 0);
     }
 
-    function _takeUsdFee(address sender, PoolKey calldata key, int256 usdAmount) internal returns (int128 fee) {
-        uint256 amount = FixedPointMathLib.abs(usdAmount) * FEE_BPS / BPS;
-        fee = SafeCast.toInt128(amount);
+    function _takeUsdFee(PoolKey calldata key, int256 usdAmount) internal returns (int128 fee) {
+        fee = _usdFee(usdAmount);
+        uint256 amount = uint128(fee);
         poolManager.mint(address(this), key.currency0.toId(), amount);
 
         address token = Currency.unwrap(key.currency1);
@@ -133,8 +144,10 @@ contract Hook is BaseHook, IHookEvents {
         treasuryFees += treasuryAmount;
         fees[tokenRecipients.creator] += creatorAmount;
         _creditAccount(token, tokenRecipients.account, accountAmount);
+    }
 
-        emit HookFee(PoolId.unwrap(key.toId()), sender, uint128(fee), 0);
+    function _usdFee(int256 usdAmount) internal pure returns (int128) {
+        return SafeCast.toInt128(FixedPointMathLib.abs(usdAmount) * FEE_BPS / BPS);
     }
 
     function _creditAccount(address token, address account, uint256 amount) internal {
