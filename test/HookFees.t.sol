@@ -9,28 +9,29 @@ import {LaunchFixture} from "./LaunchFixture.sol";
 contract HookFeesTest is LaunchFixture {
     address internal blogger = makeAddr("blogger");
 
-    function test_PrebuyFeeIsSplit() public view {
+    function test_BidAndPrebuyFeeAreSplit() public view {
         (address creator, address account) = hook.recipients(token);
 
         assertEq(creator, address(this));
         assertEq(account, address(0));
-        assertEq(hook.treasuryFees(), 3e6);
+        assertEq(hook.treasuryFees(), 3e6 + 3e6);
         assertEq(hook.fees(address(this)), 3.5e6);
-        assertEq(hook.escrowedFees(token), 3.5e6);
+        assertEq(hook.escrowedFees(token), 7e6 + 3.5e6);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
     }
 
     function test_SwapFeeIsCreditedInFull() public {
         (,, uint256 fee) = _swap(true, -33_333_333);
 
-        assertEq(hook.treasuryFees() + hook.fees(address(this)) + hook.escrowedFees(token), PREBUY_FEE + fee);
-        assertEq(_usdFees(), PREBUY_FEE + fee);
+        assertEq(hook.treasuryFees() + hook.fees(address(this)) + hook.escrowedFees(token), BID + PREBUY_FEE + fee);
+        assertEq(_usdFees(), BID + PREBUY_FEE + fee);
     }
 
     function test_CreatorAndTreasuryTakeOwnShares() public {
         assertEq(_take(address(this)), 3.5e6);
-        assertEq(_take(treasury), 3e6);
-        assertEq(hook.escrowedFees(token), 3.5e6);
-        assertEq(_usdFees(), 3.5e6);
+        assertEq(_take(treasury), 3e6 + 3e6);
+        assertEq(hook.escrowedFees(token), 7e6 + 3.5e6);
+        assertEq(_usdFees(), 7e6 + 3.5e6);
     }
 
     function test_RevertWhen_NothingToTake() public {
@@ -50,12 +51,12 @@ contract HookFeesTest is LaunchFixture {
         _setAccount(HANDLE_ID, blogger);
 
         assertEq(hook.escrowedFees(token), 0);
-        assertEq(hook.fees(blogger), 3.5e6 + 0.35e6);
+        assertEq(hook.fees(blogger), 7e6 + 3.5e6 + 0.35e6);
 
         _swap(true, -100e6);
 
         assertEq(hook.escrowedFees(token), 0);
-        assertEq(_take(blogger), 3.5e6 + 0.35e6 + 0.35e6);
+        assertEq(_take(blogger), 7e6 + 3.5e6 + 0.35e6 + 0.35e6);
     }
 
     function test_OwnLaunchGivesCreatorAndAccountSharesToOwner() public {
@@ -66,11 +67,25 @@ contract HookFeesTest is LaunchFixture {
         assertEq(_take(blogger), 0.7e6);
     }
 
+    function test_OwnLaunchRefundsBidInsteadOfSplittingIt() public {
+        _startAuction("Own", "own");
+        uint256 treasuryFeesBefore = hook.treasuryFees();
+        uint256 balanceBefore = usd.balanceOf(address(this));
+
+        _trade(_launchOwn(blogger));
+
+        assertEq(usd.balanceOf(address(this)), balanceBefore + BID);
+        assertEq(hook.treasuryFees(), treasuryFeesBefore);
+        assertEq(hook.fees(blogger), 0);
+        assertEq(hook.escrowedFees(token), 0);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+    }
+
     function test_TreasuryTakesFeesOfAllTokensAtOnce() public {
         _trade(_launchOwn(blogger));
         _swap(true, -100e6);
 
-        assertEq(_take(treasury), 3e6 + 0.3e6);
+        assertEq(_take(treasury), 3e6 + 3e6 + 0.3e6);
     }
 
     function test_RevertWhen_AccountProofIsForAnotherAddress() public {

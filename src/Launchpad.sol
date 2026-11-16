@@ -283,18 +283,19 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         token = predictToken(handleId, salt);
         LibClone.cloneDeterministic(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         Token(token).initialize(name, symbol, TOKEN_SUPPLY);
-        hook.register(token, launcher, account);
+        uint256 bid = handle.auction.highestBid;
+        hook.register(token, launcher, account, bid);
 
         uint256 airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
         handle.token = token;
         handle.launcher = launcher;
         handle.airdropTokens = airdropTokens;
-        handle.prebuyTokens = _provideLiquidity(token, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy);
+        handle.prebuyTokens = _provideLiquidity(token, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy, bid);
 
         emit Launched(handleId, token, launcher, name, symbol);
     }
 
-    function _provideLiquidity(address token, uint256 liquidityTokens, uint256 prebuyUsd)
+    function _provideLiquidity(address token, uint256 liquidityTokens, uint256 prebuyUsd, uint256 bid)
         internal
         returns (uint256 prebuyTokens)
     {
@@ -308,12 +309,13 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         int24 tick = startTick;
         poolManager.initialize(key, TickMath.getSqrtPriceAtTick(tick));
 
-        return abi.decode(poolManager.unlock(abi.encode(key, tick, liquidityTokens, prebuyUsd)), (uint256));
+        return abi.decode(poolManager.unlock(abi.encode(key, tick, liquidityTokens, prebuyUsd, bid)), (uint256));
     }
 
     function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
-        (PoolKey memory key, int24 tick, uint256 liquidityTokens, uint256 prebuyUsd) =
-            abi.decode(data, (PoolKey, int24, uint256, uint256));
+        (PoolKey memory key, int24 tick, uint256 liquidityTokens, uint256 prebuyUsd, uint256 owedUsd) =
+            abi.decode(data, (PoolKey, int24, uint256, uint256, uint256));
+        if (owedUsd != 0) poolManager.mint(address(hook), key.currency0.toId(), owedUsd);
 
         int24 tickLower = TickMath.minUsableTick(TICK_SPACING);
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmount1(
@@ -339,9 +341,10 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
                 }),
                 ""
             );
-            _settle(key.currency0, uint128(-swapDelta.amount0()));
+            owedUsd += uint128(-swapDelta.amount0());
             prebuyTokens = uint128(swapDelta.amount1());
         }
+        if (owedUsd != 0) _settle(key.currency0, owedUsd);
         _settle(key.currency1, owedTokens - prebuyTokens);
 
         return abi.encode(prebuyTokens);

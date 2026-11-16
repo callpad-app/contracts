@@ -96,9 +96,14 @@ abstract contract LaunchFixture is Test {
     }
 
     function _launchWithPrebuy() internal returns (address) {
-        string memory name = "Handle";
-        string memory symbol = "handle";
-        bytes32 handleId = keccak256(bytes(symbol));
+        bytes32 handleId = _startAuction("Handle", "handle");
+        launchpad.prebuy(handleId, PREBUY);
+        skip(launchpad.auctionDuration());
+        return launchpad.launch(handleId);
+    }
+
+    function _startAuction(string memory name, string memory symbol) internal returns (bytes32 handleId) {
+        handleId = keccak256(bytes(symbol));
         bytes memory proof = _prove(
             keccak256(
                 abi.encode(
@@ -112,9 +117,6 @@ abstract contract LaunchFixture is Test {
         );
 
         launchpad.startAuction(name, symbol, _validSalt(handleId), BID, block.timestamp, proof);
-        launchpad.prebuy(handleId, PREBUY);
-        skip(launchpad.auctionDuration());
-        return launchpad.launch(handleId);
     }
 
     function _launchOwn(address owner) internal returns (address) {

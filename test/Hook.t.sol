@@ -27,7 +27,7 @@ contract HookTest is LaunchFixture {
 
     function test_RevertWhen_RegisterCallerIsNotLaunchpad() public {
         vm.expectRevert(Hook.NotLaunchpad.selector);
-        hook.register(token, address(this), address(this));
+        hook.register(token, address(this), address(this), BID);
     }
 
     function test_RevertWhen_SetAccountCallerIsNotLaunchpad() public {
@@ -40,8 +40,8 @@ contract HookTest is LaunchFixture {
         hook.unlockCallback(abi.encode(address(this), PREBUY_FEE));
     }
 
-    function test_PrebuyPaysFeeInUsd() public view {
-        assertEq(_usdFees(), PREBUY_FEE);
+    function test_BidAndPrebuyFeeArePaidInUsd() public view {
+        assertEq(_usdFees(), BID + PREBUY_FEE);
         assertEq(_tokenFees(), 0);
     }
 

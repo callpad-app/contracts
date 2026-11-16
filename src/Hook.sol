@@ -48,8 +48,11 @@ contract Hook is BaseHook, IHookEvents {
         launchpad = launchpad_;
     }
 
-    function register(address token, address creator, address account) external onlyLaunchpad {
+    function register(address token, address creator, address account, uint256 bid) external onlyLaunchpad {
         recipients[token] = Recipients(creator, account);
+        uint256 treasuryAmount = bid * TREASURY_SHARE_BPS / BPS;
+        treasuryFees += treasuryAmount;
+        _creditAccount(token, account, bid - treasuryAmount);
     }
 
     function setAccount(address token, address account) external onlyLaunchpad {
@@ -129,9 +132,13 @@ contract Hook is BaseHook, IHookEvents {
         uint256 accountAmount = amount - treasuryAmount - creatorAmount;
         treasuryFees += treasuryAmount;
         fees[tokenRecipients.creator] += creatorAmount;
-        if (tokenRecipients.account == address(0)) escrowedFees[token] += accountAmount;
-        else fees[tokenRecipients.account] += accountAmount;
+        _creditAccount(token, tokenRecipients.account, accountAmount);
 
         emit HookFee(PoolId.unwrap(key.toId()), sender, uint128(fee), 0);
+    }
+
+    function _creditAccount(address token, address account, uint256 amount) internal {
+        if (account == address(0)) escrowedFees[token] += amount;
+        else fees[account] += amount;
     }
 }
