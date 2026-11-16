@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -12,8 +14,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {ERC20} from "solady/tokens/ERC20.sol";
-import {MockERC20} from "../lib/solady/test/utils/mocks/MockERC20.sol";
 import {Hook} from "../src/Hook.sol";
 import {Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
@@ -31,7 +31,7 @@ abstract contract LaunchFixture is Test {
     address internal treasury = makeAddr("treasury");
     IPoolManager internal manager;
     PoolSwapTest internal router;
-    MockERC20 internal usd;
+    ERC20Mock internal usd;
     Launchpad internal launchpad;
     Hook internal hook;
     address internal token;
@@ -40,7 +40,7 @@ abstract contract LaunchFixture is Test {
     function setUp() public {
         manager = IPoolManager(deployCode("PoolManager.sol:PoolManager", abi.encode(address(this))));
         router = new PoolSwapTest(manager);
-        usd = new MockERC20("USD", "USD", 6);
+        usd = new ERC20Mock();
         hook = Hook(
             address(
                 uint160(
@@ -57,7 +57,7 @@ abstract contract LaunchFixture is Test {
         usd.approve(address(router), type(uint256).max);
 
         _trade(_launchWithPrebuy());
-        ERC20(token).approve(address(router), type(uint256).max);
+        IERC20(token).approve(address(router), type(uint256).max);
     }
 
     function _trade(address token_) internal {
@@ -94,7 +94,7 @@ abstract contract LaunchFixture is Test {
         assertEq(_swappedData(), abi.encode(usdDelta, tokenDelta, fee, sqrtPriceX96));
     }
 
-    function _swappedData() internal returns (bytes memory data) {
+    function _swappedData() internal view returns (bytes memory data) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i; i < logs.length; ++i) {
             if (logs[i].topics[0] != Hook.Swapped.selector) continue;

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ERC20} from "solady/tokens/ERC20.sol";
-import {Initializable} from "solady/utils/Initializable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract Token is ERC20, Initializable {
     string private _name;
     string private _symbol;
 
-    constructor() {
+    constructor() ERC20("", "") {
         _disableInitializers();
     }
 

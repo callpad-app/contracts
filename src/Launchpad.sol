@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {Ownable} from "solady/auth/Ownable.sol";
-import {EIP712} from "solady/utils/EIP712.sol";
-import {LibClone} from "solady/utils/LibClone.sol";
-import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {Hook} from "./Hook.sol";
@@ -37,6 +38,8 @@ struct Handle {
 }
 
 contract Launchpad is EIP712, Ownable, SafeCallback {
+    using SafeERC20 for IERC20;
+
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
     int24 public constant TICK_SPACING = 200;
     uint256 internal constant BPS = 10_000;
@@ -76,13 +79,14 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     error NothingToClaim();
 
     constructor(address proofSigner_, address treasury_, address usd_, IPoolManager poolManager_, Hook hook_)
+        EIP712("Callpad", "1")
+        Ownable(msg.sender)
         SafeCallback(poolManager_)
     {
         proofSigner = proofSigner_;
         treasury = treasury_;
         usd = usd_;
         hook = hook_;
-        _initializeOwner(msg.sender);
     }
 
     function setProofSigner(address proofSigner_) external onlyOwner {
@@ -121,7 +125,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     ) external returns (bytes32 handleId) {
         Proofs.verify(
             proofSigner,
-            _hashTypedData(Proofs.startAuctionHash(name, symbol, amount, proofDeadline)),
+            _hashTypedDataV4(Proofs.startAuctionHash(name, symbol, amount, proofDeadline)),
             proofDeadline,
             proof
         );
@@ -146,7 +150,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         emit Prebought(handleId, msg.sender, amount);
 
-        SafeTransferLib.safeTransferFrom(usd, msg.sender, address(this), amount);
+        IERC20(usd).safeTransferFrom(msg.sender, address(this), amount);
     }
 
     function launch(bytes32 handleId) external returns (address token) {
@@ -167,7 +171,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     ) external returns (address token) {
         Proofs.verify(
             proofSigner,
-            _hashTypedData(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline)),
+            _hashTypedDataV4(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline)),
             proofDeadline,
             proof
         );
@@ -185,7 +189,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     function setAccount(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
         Proofs.verify(
             proofSigner,
-            _hashTypedData(Proofs.setAccountHash(handleId, msg.sender, proofDeadline)),
+            _hashTypedDataV4(Proofs.setAccountHash(handleId, msg.sender, proofDeadline)),
             proofDeadline,
             proof
         );
@@ -208,7 +212,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         emit PrebuyClaimed(handleId, msg.sender, tokens);
 
-        SafeTransferLib.safeTransfer(token, msg.sender, tokens);
+        IERC20(token).safeTransfer(msg.sender, tokens);
     }
 
     function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
@@ -216,9 +220,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     }
 
     function predictToken(bytes32 handleId, bytes32 salt) public view returns (address token) {
-        token = LibClone.predictDeterministicAddress(
-            tokenImplementation, keccak256(abi.encode(handleId, salt)), address(this)
-        );
+        token = Clones.predictDeterministicAddress(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         require(token > usd, InvalidSalt());
     }
 
@@ -254,8 +256,8 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         emit BidPlaced(handleId, msg.sender, amount, endTime);
 
-        SafeTransferLib.safeTransferFrom(usd, msg.sender, address(this), amount);
-        if (previousBid != 0) SafeTransferLib.safeTransfer(usd, previousBidder, previousBid);
+        IERC20(usd).safeTransferFrom(msg.sender, address(this), amount);
+        if (previousBid != 0) IERC20(usd).safeTransfer(previousBidder, previousBid);
     }
 
     function _cancelAuction(bytes32 handleId) internal {
@@ -266,7 +268,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         emit AuctionCancelled(handleId, bidder, refund);
 
-        SafeTransferLib.safeTransfer(usd, bidder, refund);
+        IERC20(usd).safeTransfer(bidder, refund);
     }
 
     function _launch(
@@ -281,7 +283,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         require(handle.token == address(0), AlreadyLaunched());
 
         token = predictToken(handleId, salt);
-        LibClone.cloneDeterministic(tokenImplementation, keccak256(abi.encode(handleId, salt)));
+        Clones.cloneDeterministic(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         Token(token).initialize(name, symbol, TOKEN_SUPPLY);
         uint256 bid = handle.auction.highestBid;
         hook.register(token, launcher, account, bid);
@@ -352,11 +354,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
     function _settle(Currency currency, uint256 amount) internal {
         poolManager.sync(currency);
-        SafeTransferLib.safeTransfer(Currency.unwrap(currency), address(poolManager), amount);
+        IERC20(Currency.unwrap(currency)).safeTransfer(address(poolManager), amount);
         poolManager.settle();
-    }
-
-    function _domainNameAndVersion() internal pure override returns (string memory, string memory) {
-        return ("Callpad", "1");
     }
 }

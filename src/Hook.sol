@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {SignedMath} from "@openzeppelin/contracts/utils/math/SignedMath.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
@@ -10,7 +11,6 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/Bef
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {FixedPointMathLib} from "solady/utils/FixedPointMathLib.sol";
 import {BaseHook} from "uniswap-hooks/base/BaseHook.sol";
 import {Launchpad} from "./Launchpad.sol";
 
@@ -147,7 +147,7 @@ contract Hook is BaseHook {
     }
 
     function _usdFee(int256 usdAmount) internal pure returns (int128) {
-        return SafeCast.toInt128(FixedPointMathLib.abs(usdAmount) * FEE_BPS / BPS);
+        return SafeCast.toInt128(SignedMath.abs(usdAmount) * FEE_BPS / BPS);
     }
 
     function _creditAccount(address token, address account, uint256 amount) internal {

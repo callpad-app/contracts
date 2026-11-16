@@ -5,10 +5,10 @@
       "rev": "f3dae6e6ee381f25eb6a246f7da9b85c91a68219"
     }
   },
-  "lib/solady": {
+  "lib/openzeppelin-contracts": {
     "tag": {
-      "name": "v0.1.26",
-      "rev": "acd959aa4bd04720d640bf4e6a5c71037510cc4b"
+      "name": "v5.5.0",
+      "rev": "fcbae5394ae8ad52d8e580a3477db99814b9d565"
     }
   },
   "lib/uniswap-hooks": {

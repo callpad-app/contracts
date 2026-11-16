@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 library Proofs {
     bytes32 internal constant START_AUCTION_TYPEHASH =
@@ -40,6 +40,6 @@ library Proofs {
 
     function verify(address signer, bytes32 digest, uint256 proofDeadline, bytes calldata proof) internal view {
         require(block.timestamp <= proofDeadline, ProofExpired());
-        require(SignatureCheckerLib.isValidSignatureNowCalldata(signer, digest, proof), InvalidProof());
+        require(SignatureChecker.isValidSignatureNowCalldata(signer, digest, proof), InvalidProof());
     }
 }
