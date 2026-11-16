@@ -60,6 +60,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     event BidPlaced(bytes32 indexed handleId, address indexed bidder, uint256 amount, uint256 endTime);
     event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
     event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
+    event PrebuyClaimed(bytes32 indexed handleId, address indexed buyer, uint256 tokens);
     event Launched(
         bytes32 indexed handleId, address indexed token, address indexed launcher, string name, string symbol
     );
@@ -70,6 +71,8 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     error AuctionNotEnded();
     error BidTooLow(uint256 minBid);
     error InvalidSalt();
+    error NotLaunched();
+    error NothingToClaim();
 
     constructor(address proofSigner_, address usd_, IPoolManager poolManager_, IHooks hook_)
         SafeCallback(poolManager_)
@@ -170,6 +173,21 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         }
 
         token = _launch(handle, handleId, name, symbol, salt, msg.sender);
+    }
+
+    function claimPrebuy(bytes32 handleId) external returns (uint256 tokens) {
+        Handle storage handle = handles[handleId];
+        address token = handle.token;
+        require(token != address(0), NotLaunched());
+        uint256 amount = handle.prebuys[msg.sender];
+        require(amount != 0, NothingToClaim());
+
+        delete handle.prebuys[msg.sender];
+        tokens = amount * handle.prebuyTokens / handle.totalPrebuy;
+
+        emit PrebuyClaimed(handleId, msg.sender, tokens);
+
+        SafeTransferLib.safeTransfer(token, msg.sender, tokens);
     }
 
     function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
