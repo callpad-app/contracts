@@ -1,0 +1,27 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.30;
+
+import {SignatureCheckerLib} from "solady/utils/SignatureCheckerLib.sol";
+
+library Proofs {
+    bytes32 internal constant START_AUCTION_TYPEHASH =
+        keccak256("StartAuction(string name,string symbol,uint256 bid,uint256 proofDeadline)");
+
+    error InvalidProof();
+    error ProofExpired();
+
+    function startAuctionHash(string calldata name, string calldata symbol, uint256 bid, uint256 proofDeadline)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), bid, proofDeadline)
+        );
+    }
+
+    function verify(address signer, bytes32 digest, uint256 proofDeadline, bytes calldata proof) internal view {
+        require(block.timestamp <= proofDeadline, ProofExpired());
+        require(SignatureCheckerLib.isValidSignatureNowCalldata(signer, digest, proof), InvalidProof());
+    }
+}
