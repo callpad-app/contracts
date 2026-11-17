@@ -23,7 +23,7 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 ### Auction
 
-1. `startAuction(name, symbol, salt, amount, proofDeadline, proof)` opens an auction for the handle and places the first bid. The proof covers `name`, `symbol`, the bid amount and the deadline. The auction lasts `auctionDuration` (24 hours by default).
+1. `startAuction(name, symbol, salt, minBid, amount, proofDeadline, proof)` opens an auction for the handle and places the first bid of `amount`, which must be at least `minBid`. The proof covers `name`, `symbol`, `minBid` and the deadline, so one proof is valid for any opening bid from `minBid` up. The auction lasts `auctionDuration` (24 hours by default).
 2. `bid(handleId, amount)` outbids the current highest bid by at least `auctionMinBidIncrementBps` (10% by default). The previous bidder is refunded in the same transaction. A bid placed within the last `auctionExtension` (5 minutes by default) extends the auction by that same interval.
 3. `prebuy(handleId, amount)` deposits USD while the auction is active. Prebuys of all buyers are pooled and spent in a single swap at launch.
 4. `launch(handleId)` is callable by anyone once the auction has ended. The highest bidder becomes the creator, the account stays unset.
@@ -71,7 +71,7 @@ Every swap emits `Swapped(token, usdAmount, tokenAmount, fee, sqrtPriceX96)`, wh
 ## Roles and trust assumptions
 
 - **Owner** of the Launchpad (`Ownable`) can change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply to auctions and launches that have not happened yet, including auctions already in progress.
-- **Proof signer** is trusted to attest handle ownership and to authorize which handles may be auctioned, under which name and with which opening bid.
+- **Proof signer** is trusted to attest handle ownership and to authorize which handles may be auctioned, under which name and with which minimum opening bid.
 - **Treasury** receives its share of bids and swap fees.
 - The hook accepts `register` and `setAccount` calls only from the Launchpad and allows pool initialization only by the Launchpad.
 

@@ -120,7 +120,13 @@ abstract contract LaunchFixture is Test {
 
     function _startAuction(string memory name, string memory symbol) internal returns (bytes32 handleId) {
         handleId = keccak256(bytes(symbol));
-        bytes memory proof = _prove(
+        bytes memory proof = _startAuctionProof(name, symbol);
+
+        launchpad.startAuction(name, symbol, _validSalt(handleId), BID, BID, block.timestamp, proof);
+    }
+
+    function _startAuctionProof(string memory name, string memory symbol) internal view returns (bytes memory) {
+        return _prove(
             keccak256(
                 abi.encode(
                     Proofs.START_AUCTION_TYPEHASH,
@@ -131,8 +137,6 @@ abstract contract LaunchFixture is Test {
                 )
             )
         );
-
-        launchpad.startAuction(name, symbol, _validSalt(handleId), BID, block.timestamp, proof);
     }
 
     function _launchOwn(address owner) internal returns (address) {

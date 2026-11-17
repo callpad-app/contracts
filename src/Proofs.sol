@@ -5,7 +5,7 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 
 library Proofs {
     bytes32 internal constant START_AUCTION_TYPEHASH =
-        keccak256("StartAuction(string name,string symbol,uint256 bid,uint256 proofDeadline)");
+        keccak256("StartAuction(string name,string symbol,uint256 minBid,uint256 proofDeadline)");
     bytes32 internal constant LAUNCH_OWN_TYPEHASH =
         keccak256("LaunchOwn(string name,string symbol,address owner,uint256 proofDeadline)");
     bytes32 internal constant SET_ACCOUNT_TYPEHASH =
@@ -14,13 +14,13 @@ library Proofs {
     error InvalidProof();
     error ProofExpired();
 
-    function startAuctionHash(string calldata name, string calldata symbol, uint256 bid, uint256 proofDeadline)
+    function startAuctionHash(string calldata name, string calldata symbol, uint256 minBid, uint256 proofDeadline)
         internal
         pure
         returns (bytes32)
     {
         return keccak256(
-            abi.encode(START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), bid, proofDeadline)
+            abi.encode(START_AUCTION_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(symbol)), minBid, proofDeadline)
         );
     }
 

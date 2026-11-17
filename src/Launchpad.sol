@@ -119,16 +119,18 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         string calldata name,
         string calldata symbol,
         bytes32 salt,
+        uint256 minBid,
         uint256 amount,
         uint256 proofDeadline,
         bytes calldata proof
     ) external returns (bytes32 handleId) {
         Proofs.verify(
             proofSigner,
-            _hashTypedDataV4(Proofs.startAuctionHash(name, symbol, amount, proofDeadline)),
+            _hashTypedDataV4(Proofs.startAuctionHash(name, symbol, minBid, proofDeadline)),
             proofDeadline,
             proof
         );
+        require(amount >= minBid, BidTooLow(minBid));
 
         handleId = keccak256(bytes(symbol));
         require(handles[handleId].token == address(0), AlreadyLaunched());
