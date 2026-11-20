@@ -167,6 +167,17 @@ abstract contract LaunchFixture is Test {
         return _prove(keccak256(abi.encode(Proofs.SET_ACCOUNT_TYPEHASH, handleId, account, block.timestamp)));
     }
 
+    function _claimAirdrop(bytes32 handleId, address account, uint256 amount) internal returns (uint256) {
+        bytes memory proof = _airdropProof(handleId, account, amount);
+
+        vm.prank(account);
+        return launchpad.claimAirdrop(handleId, amount, block.timestamp, proof);
+    }
+
+    function _airdropProof(bytes32 handleId, address account, uint256 amount) internal view returns (bytes memory) {
+        return _prove(keccak256(abi.encode(Proofs.CLAIM_AIRDROP_TYPEHASH, handleId, account, amount, block.timestamp)));
+    }
+
     function _prove(bytes32 structHash) internal view returns (bytes memory) {
         bytes32 domainSeparator = keccak256(
             abi.encode(

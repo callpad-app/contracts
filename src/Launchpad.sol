@@ -31,10 +31,11 @@ struct Handle {
     Auction auction;
     address token;
     address launcher;
-    mapping(address buyer => uint256 amount) prebuys;
     uint256 totalPrebuy;
     uint256 prebuyTokens;
     uint256 airdropTokens;
+    mapping(address buyer => uint256 amount) prebuys;
+    mapping(address account => uint256 amount) airdropClaims;
 }
 
 contract Launchpad is EIP712, Ownable, SafeCallback {
@@ -65,6 +66,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
     event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
     event PrebuyClaimed(bytes32 indexed handleId, address indexed buyer, uint256 tokens);
+    event AirdropClaimed(bytes32 indexed handleId, address indexed account, uint256 tokens);
     event Launched(
         bytes32 indexed handleId, address indexed token, address indexed launcher, string name, string symbol
     );
@@ -217,8 +219,36 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         IERC20(token).safeTransfer(msg.sender, tokens);
     }
 
+    function claimAirdrop(bytes32 handleId, uint256 amount, uint256 proofDeadline, bytes calldata proof)
+        external
+        returns (uint256 tokens)
+    {
+        Proofs.verify(
+            proofSigner,
+            _hashTypedDataV4(Proofs.claimAirdropHash(handleId, msg.sender, amount, proofDeadline)),
+            proofDeadline,
+            proof
+        );
+
+        Handle storage handle = handles[handleId];
+        uint256 claimed = handle.airdropClaims[msg.sender];
+        require(amount > claimed, NothingToClaim());
+
+        tokens = amount - claimed;
+        handle.airdropClaims[msg.sender] = amount;
+        handle.airdropTokens -= tokens;
+
+        emit AirdropClaimed(handleId, msg.sender, tokens);
+
+        IERC20(handle.token).safeTransfer(msg.sender, tokens);
+    }
+
     function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
         return handles[handleId].prebuys[buyer];
+    }
+
+    function airdropClaimOf(bytes32 handleId, address account) external view returns (uint256) {
+        return handles[handleId].airdropClaims[account];
     }
 
     function predictToken(bytes32 handleId, bytes32 salt) public view returns (address token) {

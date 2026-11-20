@@ -15,7 +15,7 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 - **Handle** — identified on-chain by `handleId = keccak256(bytes(symbol))`. A handle can be launched once.
 - **USD** — the ERC-20 passed to the Launchpad constructor. All bids, prebuys and fees are denominated in it. It is always `currency0` of the pool: token addresses are required to be greater than the USD address, which is enforced through the clone salt.
-- **Proof** — an EIP-712 signature (domain `Callpad`, version `1`) by `proofSigner` with a deadline. Proofs gate starting an auction, launching as the handle owner and binding the handle's account. `SignatureChecker` is used, so the signer may be an EOA or an ERC-1271 contract.
+- **Proof** — an EIP-712 signature (domain `Callpad`, version `1`) by `proofSigner` with a deadline. Proofs gate starting an auction, launching as the handle owner, binding the handle's account and claiming the airdrop. `SignatureChecker` is used, so the signer may be an EOA or an ERC-1271 contract.
 - **Creator** — the address that launched the token: the auction winner or the handle owner.
 - **Account** — the address of the handle owner. It is known at launch for owner launches and bound later through `setAccount` for auction launches.
 
@@ -38,7 +38,7 @@ Both paths end in the same steps:
 
 1. The token is deployed as a deterministic clone with salt `keccak256(abi.encode(handleId, salt))` and `TOKEN_SUPPLY` (1,000,000,000 tokens with 18 decimals) is minted to the Launchpad.
 2. The token is registered in the hook together with its creator and account. For auction launches the winning bid is credited as fees: `TREASURY_SHARE_BPS` (30%) to the treasury and the rest to the account, held in escrow until the account is set.
-3. `airdropBps` of the supply (5% by default) stays in the Launchpad and is recorded as `airdropTokens`.
+3. `airdropBps` of the supply (5% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet.
 4. A USD/token pool is initialized at `startTick` with LP fee `0`, tick spacing `200` and the hook. The remaining supply is added as single-sided token liquidity over the range from the minimum usable tick to `startTick`. The position belongs to the Launchpad, which has no function to remove it.
 5. The pooled prebuy USD is swapped for tokens in that pool. The swap pays the regular hook fee. The tokens received are recorded as `prebuyTokens`.
 
@@ -46,6 +46,7 @@ Both paths end in the same steps:
 
 - `claimPrebuy(handleId)` transfers a buyer's share of `prebuyTokens`, pro rata to their share of the total prebuy.
 - `setAccount(handleId, proofDeadline, proof)` binds the caller as the handle's account, once. The proof covers `handleId`, the caller and the deadline. Fees escrowed for the token are released to the account.
+- `claimAirdrop(handleId, amount, proofDeadline, proof)` transfers airdrop tokens to the caller. The proof covers `handleId`, the caller, `amount` and the deadline. `amount` is the total the caller is owed so far, not the size of one claim: the call pays `amount` minus what the caller has already claimed (`airdropClaimOf`) and reverts with `NothingToClaim` when that is zero, so a proof cannot be used twice and a larger proof later pays only the increase. Claims are taken out of `airdropTokens` and revert once it runs out, so they never reach the tokens of prebuyers.
 
 ## Fees
 
@@ -71,7 +72,7 @@ Every swap emits `Swapped(token, usdAmount, tokenAmount, fee, sqrtPriceX96)`, wh
 ## Roles and trust assumptions
 
 - **Owner** of the Launchpad (`Ownable`) can change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply to auctions and launches that have not happened yet, including auctions already in progress.
-- **Proof signer** is trusted to attest handle ownership and to authorize which handles may be auctioned, under which name and with which minimum opening bid.
+- **Proof signer** is trusted to attest handle ownership and to authorize which handles may be auctioned, under which name and with which minimum opening bid. It also decides who gets how much of each airdrop and when: the contract only caps the total at the handle's `airdropTokens`.
 - **Treasury** receives its share of bids and swap fees.
 - The hook accepts `register` and `setAccount` calls only from the Launchpad and allows pool initialization only by the Launchpad.
 

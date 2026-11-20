@@ -10,6 +10,8 @@ library Proofs {
         keccak256("LaunchOwn(string name,string symbol,address owner,uint256 proofDeadline)");
     bytes32 internal constant SET_ACCOUNT_TYPEHASH =
         keccak256("SetAccount(bytes32 handleId,address account,uint256 proofDeadline)");
+    bytes32 internal constant CLAIM_AIRDROP_TYPEHASH =
+        keccak256("ClaimAirdrop(bytes32 handleId,address account,uint256 amount,uint256 proofDeadline)");
 
     error InvalidProof();
     error ProofExpired();
@@ -36,6 +38,14 @@ library Proofs {
 
     function setAccountHash(bytes32 handleId, address account, uint256 proofDeadline) internal pure returns (bytes32) {
         return keccak256(abi.encode(SET_ACCOUNT_TYPEHASH, handleId, account, proofDeadline));
+    }
+
+    function claimAirdropHash(bytes32 handleId, address account, uint256 amount, uint256 proofDeadline)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encode(CLAIM_AIRDROP_TYPEHASH, handleId, account, amount, proofDeadline));
     }
 
     function verify(address signer, bytes32 digest, uint256 proofDeadline, bytes calldata proof) internal view {
