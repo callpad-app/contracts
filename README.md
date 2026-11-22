@@ -38,7 +38,7 @@ Both paths end in the same steps:
 
 1. The token is deployed as a deterministic clone with salt `keccak256(abi.encode(handleId, salt))` and `TOKEN_SUPPLY` (1,000,000,000 tokens with 18 decimals) is minted to the Launchpad.
 2. The token is registered in the hook together with its creator and account. For auction launches the winning bid is credited as fees: `TREASURY_SHARE_BPS` (30%) to the treasury and the rest to the account, held in escrow until the account is set.
-3. `airdropBps` of the supply (5% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet.
+3. `airdropBps` of the supply (1% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet.
 4. A USD/token pool is initialized at `startTick` with LP fee `0`, tick spacing `200` and the hook. The remaining supply is added as single-sided token liquidity over the range from the minimum usable tick to `startTick`. The position belongs to the Launchpad, which has no function to remove it.
 5. The pooled prebuy USD is swapped for tokens in that pool. The swap pays the regular hook fee. The tokens received are recorded as `prebuyTokens`.
 

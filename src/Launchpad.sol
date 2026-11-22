@@ -53,7 +53,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     uint256 public auctionDuration = 24 hours;
     uint256 public auctionExtension = 5 minutes;
     uint256 public auctionMinBidIncrementBps = 1000;
-    uint256 public airdropBps = 500;
+    uint256 public airdropBps = 100;
     int24 public startTick = 391_400;
     mapping(bytes32 handleId => Handle) public handles;
 
