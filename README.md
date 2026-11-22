@@ -13,7 +13,7 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 ## Concepts
 
-- **Handle** — identified on-chain by `handleId = keccak256(bytes(symbol))`. A handle can be launched once.
+- **Handle** — identified on-chain by `handleId = handleIdOf(symbol)`, the hash of the symbol in lowercase. The symbol keeps the case it was proven with, so `ParikPatelCFA` and `parikpatelcfa` are one handle. A handle can be launched once.
 - **USD** — the ERC-20 passed to the Launchpad constructor. All bids, prebuys and fees are denominated in it. It is always `currency0` of the pool: token addresses are required to be greater than the USD address, which is enforced through the clone salt.
 - **Proof** — an EIP-712 signature (domain `Callpad`, version `1`) by `proofSigner` with a deadline. Proofs gate starting an auction, launching as the handle owner, confirming the call, binding the handle's account and claiming the airdrop. `SignatureChecker` is used, so the signer may be an EOA or an ERC-1271 contract.
 - **Creator** — the address that launched the token: the auction winner or the handle owner.

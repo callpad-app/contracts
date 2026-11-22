@@ -33,6 +33,23 @@ contract LaunchpadTest is LaunchFixture {
         launchpad.startAuction("Other", "other", salt, BID, BID - 1, block.timestamp, proof);
     }
 
+    function test_SymbolKeepsItsCaseAndHandleIdIgnoresIt() public {
+        bytes32 handleId = _startAuction("Parik Patel", "ParikPatelCFA");
+
+        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        assertEq(auction.symbol, "ParikPatelCFA");
+        assertEq(handleId, keccak256("parikpatelcfa"));
+    }
+
+    function test_RevertWhen_HandleIsAuctionedAgainInAnotherCase() public {
+        bytes32 handleId = _startAuction("Parik Patel", "ParikPatelCFA");
+        bytes memory proof = _startAuctionProof("Parik Patel", "parikpatelcfa");
+        bytes32 salt = _validSalt(handleId);
+
+        vm.expectRevert(Launchpad.AuctionAlreadyExists.selector);
+        launchpad.startAuction("Parik Patel", "parikpatelcfa", salt, BID, BID, block.timestamp, proof);
+    }
+
     function test_AnyoneConfirmsTheCallWithAProof() public {
         bytes memory proof = _callProof(HANDLE_ID);
 

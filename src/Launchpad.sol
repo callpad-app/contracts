@@ -137,7 +137,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         _verifyProof(Proofs.startAuctionHash(name, symbol, minBid, proofDeadline), proofDeadline, proof);
         require(amount >= minBid, BidTooLow(minBid));
 
-        handleId = keccak256(bytes(symbol));
+        handleId = handleIdOf(symbol);
         require(handles[handleId].token == address(0), AlreadyLaunched());
 
         _startAuction(handleId, name, symbol, salt);
@@ -178,7 +178,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     ) external returns (address token) {
         _verifyProof(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline), proofDeadline, proof);
 
-        bytes32 handleId = keccak256(bytes(symbol));
+        bytes32 handleId = handleIdOf(symbol);
         Handle storage handle = handles[handleId];
         if (handle.auction.endTime != 0) {
             salt = handle.auction.salt;
@@ -255,6 +255,14 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
     function airdropClaimOf(bytes32 handleId, bytes32 userId) external view returns (uint256) {
         return handles[handleId].airdropClaims[userId];
+    }
+
+    function handleIdOf(string memory symbol) public pure returns (bytes32) {
+        bytes memory handle = bytes(symbol);
+        for (uint256 i; i < handle.length; ++i) {
+            if (handle[i] >= "A" && handle[i] <= "Z") handle[i] = bytes1(uint8(handle[i]) + 32);
+        }
+        return keccak256(handle);
     }
 
     function predictToken(bytes32 handleId, bytes32 salt) public view returns (address token) {

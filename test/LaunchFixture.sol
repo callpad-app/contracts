@@ -119,7 +119,7 @@ abstract contract LaunchFixture is Test {
     }
 
     function _startAuction(string memory name, string memory symbol) internal returns (bytes32 handleId) {
-        handleId = keccak256(bytes(symbol));
+        handleId = launchpad.handleIdOf(symbol);
         bytes memory proof = _startAuctionProof(name, symbol);
 
         launchpad.startAuction(name, symbol, _validSalt(handleId), BID, BID, block.timestamp, proof);
