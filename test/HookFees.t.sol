@@ -48,6 +48,7 @@ contract HookFeesTest is LaunchFixture {
     function test_AccountGetsEscrowedShareOnceSetAndDirectShareAfter() public {
         _swap(true, -100e6);
 
+        _confirmCall(HANDLE_ID);
         _setAccount(HANDLE_ID, blogger);
 
         assertEq(hook.escrowedFees(token), 0);
@@ -105,15 +106,16 @@ contract HookFeesTest is LaunchFixture {
         launchpad.setAccount(HANDLE_ID, proofDeadline, proof);
     }
 
-    function test_RevertWhen_AccountSetBeforeLaunch() public {
-        bytes memory proof = _accountProof(OWN_HANDLE_ID, blogger);
+    function test_RevertWhen_AccountSetBeforeTheCall() public {
+        bytes memory proof = _accountProof(HANDLE_ID, blogger);
 
         vm.prank(blogger);
-        vm.expectRevert(Launchpad.NotLaunched.selector);
-        launchpad.setAccount(OWN_HANDLE_ID, block.timestamp, proof);
+        vm.expectRevert(Launchpad.NotCalled.selector);
+        launchpad.setAccount(HANDLE_ID, block.timestamp, proof);
     }
 
     function test_RevertWhen_AccountAlreadySet() public {
+        _confirmCall(HANDLE_ID);
         _setAccount(HANDLE_ID, blogger);
         bytes memory proof = _accountProof(HANDLE_ID, address(this));
 

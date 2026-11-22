@@ -156,6 +156,14 @@ abstract contract LaunchFixture is Test {
         return launchpad.launchOwn(name, symbol, salt, block.timestamp, proof);
     }
 
+    function _confirmCall(bytes32 handleId) internal {
+        launchpad.confirmCall(handleId, block.timestamp, _callProof(handleId));
+    }
+
+    function _callProof(bytes32 handleId) internal view returns (bytes memory) {
+        return _prove(keccak256(abi.encode(Proofs.CONFIRM_CALL_TYPEHASH, handleId, block.timestamp)));
+    }
+
     function _setAccount(bytes32 handleId, address account) internal {
         bytes memory proof = _accountProof(handleId, account);
 
@@ -167,15 +175,24 @@ abstract contract LaunchFixture is Test {
         return _prove(keccak256(abi.encode(Proofs.SET_ACCOUNT_TYPEHASH, handleId, account, block.timestamp)));
     }
 
-    function _claimAirdrop(bytes32 handleId, address account, uint256 amount) internal returns (uint256) {
-        bytes memory proof = _airdropProof(handleId, account, amount);
+    function _claimAirdrop(bytes32 handleId, bytes32 userId, address account, uint256 amount)
+        internal
+        returns (uint256)
+    {
+        bytes memory proof = _airdropProof(handleId, userId, account, amount);
 
         vm.prank(account);
-        return launchpad.claimAirdrop(handleId, amount, block.timestamp, proof);
+        return launchpad.claimAirdrop(handleId, userId, amount, block.timestamp, proof);
     }
 
-    function _airdropProof(bytes32 handleId, address account, uint256 amount) internal view returns (bytes memory) {
-        return _prove(keccak256(abi.encode(Proofs.CLAIM_AIRDROP_TYPEHASH, handleId, account, amount, block.timestamp)));
+    function _airdropProof(bytes32 handleId, bytes32 userId, address account, uint256 amount)
+        internal
+        view
+        returns (bytes memory)
+    {
+        return _prove(
+            keccak256(abi.encode(Proofs.CLAIM_AIRDROP_TYPEHASH, handleId, userId, account, amount, block.timestamp))
+        );
     }
 
     function _prove(bytes32 structHash) internal view returns (bytes memory) {

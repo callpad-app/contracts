@@ -6,6 +6,7 @@ import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -34,14 +35,17 @@ struct Handle {
     uint256 totalPrebuy;
     uint256 prebuyTokens;
     uint256 airdropTokens;
+    uint256 calledAt;
     mapping(address buyer => uint256 amount) prebuys;
-    mapping(address account => uint256 amount) airdropClaims;
+    mapping(bytes32 userId => uint256 amount) airdropClaims;
 }
 
 contract Launchpad is EIP712, Ownable, SafeCallback {
     using SafeERC20 for IERC20;
 
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
+    uint256 public constant AIRDROP_CAP = 1_000_000e18;
+    uint256 public constant AIRDROP_UNLOCK_PERIOD = 7 days;
     int24 public constant TICK_SPACING = 200;
     uint256 internal constant BPS = 10_000;
 
@@ -66,17 +70,21 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
     event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
     event PrebuyClaimed(bytes32 indexed handleId, address indexed buyer, uint256 tokens);
-    event AirdropClaimed(bytes32 indexed handleId, address indexed account, uint256 tokens);
+    event AirdropClaimed(bytes32 indexed handleId, bytes32 indexed userId, address indexed account, uint256 tokens);
+    event CallConfirmed(bytes32 indexed handleId);
     event Launched(
         bytes32 indexed handleId, address indexed token, address indexed launcher, string name, string symbol
     );
 
+    error AirdropCapExceeded();
+    error AlreadyCalled();
     error AlreadyLaunched();
     error AuctionAlreadyExists();
     error AuctionNotActive();
     error AuctionNotEnded();
     error BidTooLow(uint256 minBid);
     error InvalidSalt();
+    error NotCalled();
     error NotLaunched();
     error NothingToClaim();
 
@@ -126,12 +134,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         uint256 proofDeadline,
         bytes calldata proof
     ) external returns (bytes32 handleId) {
-        Proofs.verify(
-            proofSigner,
-            _hashTypedDataV4(Proofs.startAuctionHash(name, symbol, minBid, proofDeadline)),
-            proofDeadline,
-            proof
-        );
+        _verifyProof(Proofs.startAuctionHash(name, symbol, minBid, proofDeadline), proofDeadline, proof);
         require(amount >= minBid, BidTooLow(minBid));
 
         handleId = keccak256(bytes(symbol));
@@ -173,12 +176,7 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         uint256 proofDeadline,
         bytes calldata proof
     ) external returns (address token) {
-        Proofs.verify(
-            proofSigner,
-            _hashTypedDataV4(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline)),
-            proofDeadline,
-            proof
-        );
+        _verifyProof(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline), proofDeadline, proof);
 
         bytes32 handleId = keccak256(bytes(symbol));
         Handle storage handle = handles[handleId];
@@ -190,18 +188,25 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender);
     }
 
+    function confirmCall(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
+        _verifyProof(Proofs.confirmCallHash(handleId, proofDeadline), proofDeadline, proof);
+
+        Handle storage handle = handles[handleId];
+        require(handle.token != address(0), NotLaunched());
+        require(handle.calledAt == 0, AlreadyCalled());
+
+        handle.calledAt = block.timestamp;
+
+        emit CallConfirmed(handleId);
+    }
+
     function setAccount(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
-        Proofs.verify(
-            proofSigner,
-            _hashTypedDataV4(Proofs.setAccountHash(handleId, msg.sender, proofDeadline)),
-            proofDeadline,
-            proof
-        );
+        _verifyProof(Proofs.setAccountHash(handleId, msg.sender, proofDeadline), proofDeadline, proof);
 
-        address token = handles[handleId].token;
-        require(token != address(0), NotLaunched());
+        Handle storage handle = handles[handleId];
+        require(handle.calledAt != 0, NotCalled());
 
-        hook.setAccount(token, msg.sender);
+        hook.setAccount(handle.token, msg.sender);
     }
 
     function claimPrebuy(bytes32 handleId) external returns (uint256 tokens) {
@@ -219,26 +224,27 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         IERC20(token).safeTransfer(msg.sender, tokens);
     }
 
-    function claimAirdrop(bytes32 handleId, uint256 amount, uint256 proofDeadline, bytes calldata proof)
+    function claimAirdrop(bytes32 handleId, bytes32 userId, uint256 amount, uint256 proofDeadline, bytes calldata proof)
         external
         returns (uint256 tokens)
     {
-        Proofs.verify(
-            proofSigner,
-            _hashTypedDataV4(Proofs.claimAirdropHash(handleId, msg.sender, amount, proofDeadline)),
-            proofDeadline,
-            proof
-        );
+        _verifyProof(Proofs.claimAirdropHash(handleId, userId, msg.sender, amount, proofDeadline), proofDeadline, proof);
+
+        require(amount <= AIRDROP_CAP, AirdropCapExceeded());
 
         Handle storage handle = handles[handleId];
-        uint256 claimed = handle.airdropClaims[msg.sender];
-        require(amount > claimed, NothingToClaim());
+        uint256 calledAt = handle.calledAt;
+        require(calledAt != 0, NotCalled());
 
-        tokens = amount - claimed;
-        handle.airdropClaims[msg.sender] = amount;
+        uint256 unlocked = amount * Math.min(block.timestamp - calledAt, AIRDROP_UNLOCK_PERIOD) / AIRDROP_UNLOCK_PERIOD;
+        uint256 claimed = handle.airdropClaims[userId];
+        require(unlocked > claimed, NothingToClaim());
+
+        tokens = unlocked - claimed;
+        handle.airdropClaims[userId] = unlocked;
         handle.airdropTokens -= tokens;
 
-        emit AirdropClaimed(handleId, msg.sender, tokens);
+        emit AirdropClaimed(handleId, userId, msg.sender, tokens);
 
         IERC20(handle.token).safeTransfer(msg.sender, tokens);
     }
@@ -247,13 +253,17 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         return handles[handleId].prebuys[buyer];
     }
 
-    function airdropClaimOf(bytes32 handleId, address account) external view returns (uint256) {
-        return handles[handleId].airdropClaims[account];
+    function airdropClaimOf(bytes32 handleId, bytes32 userId) external view returns (uint256) {
+        return handles[handleId].airdropClaims[userId];
     }
 
     function predictToken(bytes32 handleId, bytes32 salt) public view returns (address token) {
         token = Clones.predictDeterministicAddress(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         require(token > usd, InvalidSalt());
+    }
+
+    function _verifyProof(bytes32 structHash, uint256 proofDeadline, bytes calldata proof) internal view {
+        Proofs.verify(proofSigner, _hashTypedDataV4(structHash), proofDeadline, proof);
     }
 
     function _startAuction(bytes32 handleId, string calldata name, string calldata symbol, bytes32 salt) internal {
@@ -320,7 +330,9 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         uint256 bid = handle.auction.highestBid;
         hook.register(token, launcher, account, bid);
 
-        uint256 airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
+        uint256 airdropTokens;
+        if (account == address(0)) airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
+        else handle.calledAt = block.timestamp;
         handle.token = token;
         handle.launcher = launcher;
         handle.airdropTokens = airdropTokens;
