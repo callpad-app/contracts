@@ -6,7 +6,7 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 | File | Purpose |
 | --- | --- |
-| [`src/Launchpad.sol`](src/Launchpad.sol) | Handle auctions, prebuys, token deployment, pool initialization and liquidity, admin settings. Upgradeable, lives behind a UUPS proxy |
+| [`src/Launchpad.sol`](src/Launchpad.sol) | Handle auctions, the creator's prebuy, token deployment, pool initialization and liquidity, admin settings. Upgradeable, lives behind a UUPS proxy |
 | [`src/Hook.sol`](src/Hook.sol) | Uniswap v4 hook: restricts pool creation to the Launchpad, takes the swap fee and accounts for fee recipients |
 | [`src/Token.sol`](src/Token.sol) | ERC-20 implementation behind minimal-proxy clones, fixed supply minted once to the Launchpad |
 | [`src/Proofs.sol`](src/Proofs.sol) | EIP-712 struct hashes and signature checks for off-chain proofs |
@@ -23,14 +23,14 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 ### Auction
 
-1. `startAuction(name, symbol, salt, minBid, amount, proofDeadline, proof)` opens an auction for the handle and places the first bid of `amount`, which must be at least `minBid`. The proof covers `name`, `symbol`, `minBid` and the deadline, so one proof is valid for any opening bid from `minBid` up. The auction lasts `auctionDuration` (24 hours by default). The auction also records the settings in force at that moment: `auctionExtension`, `auctionMinBidIncrementBps`, `airdropBps` and `startTick`. They stay with it until launch, whatever the owner changes later.
-2. `bid(handleId, amount)` outbids the current highest bid by at least the auction's bid increment (10% by default). The previous bidder is refunded in the same transaction. A bid placed within the auction's extension (the last 5 minutes by default) extends the auction by that same interval.
-3. `prebuy(handleId, amount)` deposits USD while the auction is active. Prebuys of all buyers are pooled and spent in a single swap at launch.
+1. `startAuction(name, symbol, salt, minBid, amount, buyAmount, proofDeadline, proof)` opens an auction for the handle and places the first bid of `amount`, which must be at least `minBid`. The proof covers `name`, `symbol`, `minBid` and the deadline, so one proof is valid for any opening bid from `minBid` up. The auction lasts `auctionDuration` (24 hours by default). The auction also records the settings in force at that moment: `auctionExtension`, `auctionMinBidIncrementBps`, `airdropBps` and `startTick`. They stay with it until launch, whatever the owner changes later.
+2. `bid(handleId, amount, buyAmount)` outbids the current highest bid by at least the auction's bid increment (10% by default). The previous bidder is refunded in the same transaction. A bid placed within the auction's extension (the last 5 minutes by default) extends the auction by that same interval.
+3. Every bid, the first one included, carries a prebuy: `buyAmount` of USD deposited on top of the bid, which may be zero. Only the highest bidder has a prebuy. When they are outbid, it is refunded together with their bid, and the prebuy of the new bid takes its place. The prebuy does not count towards the bid.
 4. `launch(handleId)` is callable by anyone once the auction has ended. The highest bidder becomes the creator, the account stays unset.
 
 ### Owner launch
 
-`launchOwn(name, symbol, salt, proofDeadline, proof)` lets the handle owner launch directly. The proof covers `name`, `symbol`, the caller and the deadline. If an auction for the handle is in progress or finished but not yet launched, it is cancelled: the highest bidder is refunded, the auction's salt is reused so the token address announced in `AuctionStarted` stays valid, its start tick is reused so prebuyers get the price they prebought at, and existing prebuys are kept. An owner launch without an auction uses the current `startTick`. The caller becomes both the creator and the account. The token counts as called from the start: `calledAt` is set at launch, so `confirmCall` reverts with `AlreadyCalled`.
+`launchOwn(name, symbol, salt, proofDeadline, buyAmount, proof)` lets the handle owner launch directly. The proof covers `name`, `symbol`, the caller and the deadline. If an auction for the handle is in progress or finished but not yet launched, it is cancelled: the highest bidder gets their bid and prebuy back, the auction's salt is reused so the token address announced in `AuctionStarted` stays valid, and its start tick is reused. An owner launch without an auction uses the current `startTick`. The owner may prebuy too: `buyAmount` of USD is taken from the caller, and it may be zero. The caller becomes both the creator and the account. The token counts as called from the start: `calledAt` is set at launch, so `confirmCall` reverts with `AlreadyCalled`.
 
 ### Launch
 
@@ -40,16 +40,15 @@ Both paths end in the same steps:
 2. The token is registered in the hook together with its creator and account. For auction launches the winning bid is credited as fees: `TREASURY_SHARE_BPS` (30%) to the treasury and the rest to the account, held in escrow until the account is set.
 3. The auction's `airdropBps` of the supply (1% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet. An owner launch has no airdrop: its whole supply goes to the pool.
 4. A USD/token pool is initialized at the start tick with LP fee `0`, tick spacing `200` and the hook. The remaining supply is added as single-sided token liquidity over the range from the minimum usable tick to the start tick. The position belongs to the Launchpad, which has no function to remove it.
-5. The pooled prebuy USD is swapped for tokens in that pool. The swap pays the regular hook fee. The tokens received are recorded as `prebuyTokens`.
+5. The creator's prebuy USD is swapped for tokens in that pool, as the first trade. The swap pays the regular hook fee. The tokens received are sent to the creator in the same transaction.
 
-`Launched(handleId, token, launcher, name, symbol, airdropTokens, startTick)` reports what the token launched with: the airdrop kept in the Launchpad and the tick the pool started at.
+`Launched(handleId, token, launcher, name, symbol, airdropTokens, buyAmount, startTick)` reports what the token launched with: the airdrop kept in the Launchpad, the creator's prebuy in USD and the tick the pool started at. It is emitted before the pool is created, so the `Swapped` of the prebuy follows it. `BidPlaced(handleId, bidder, amount, buyAmount, endTime)` reports the prebuy of every bid.
 
 ### After launch
 
-- `claimPrebuy(handleId)` transfers a buyer's share of `prebuyTokens`, pro rata to their share of the total prebuy.
 - `confirmCall(handleId, proofDeadline, proof)` records that the handle owner has called the token, once, as `calledAt`. The proof covers `handleId` and the deadline, not the caller, so anyone holding it can submit it.
 - `setAccount(handleId, proofDeadline, proof)` binds the caller as the handle's account, once, after the call is confirmed: before that it reverts with `NotCalled`. The proof covers `handleId`, the caller and the deadline. Fees escrowed for the token are released to the account.
-- `claimAirdrop(handleId, userId, amount, proofDeadline, proof)` transfers airdrop tokens to the caller. The proof covers `handleId`, `userId`, the caller, `amount` and the deadline. `userId` identifies the off-chain user the share belongs to: claims are counted per `userId`, not per address, so a user may claim to any address and never gets more than one share. `amount` is the user's whole share of the airdrop, not the size of one claim, and may not exceed `AIRDROP_CAP` (1,000,000 tokens). The share unlocks evenly over `AIRDROP_UNLOCK_PERIOD` (7 days) from `calledAt`, so there is nothing to claim before `confirmCall`: the claim reverts with `NotCalled`. It does not wait for `setAccount`. It pays the unlocked part of `amount` minus what the user has already claimed (`airdropClaimOf`) and reverts with `NothingToClaim` when that is zero, so a proof cannot be used twice at the same moment and a later claim pays only what has unlocked since. Claims are taken out of `airdropTokens` and revert once it runs out, so they never reach the tokens of prebuyers.
+- `claimAirdrop(handleId, userId, amount, proofDeadline, proof)` transfers airdrop tokens to the caller. The proof covers `handleId`, `userId`, the caller, `amount` and the deadline. `userId` identifies the off-chain user the share belongs to: claims are counted per `userId`, not per address, so a user may claim to any address and never gets more than one share. `amount` is the user's whole share of the airdrop, not the size of one claim, and may not exceed `AIRDROP_CAP` (1,000,000 tokens). The share unlocks evenly over `AIRDROP_UNLOCK_PERIOD` (7 days) from `calledAt`, so there is nothing to claim before `confirmCall`: the claim reverts with `NotCalled`. It does not wait for `setAccount`. It pays the unlocked part of `amount` minus what the user has already claimed (`airdropClaimOf`) and reverts with `NothingToClaim` when that is zero, so a proof cannot be used twice at the same moment and a later claim pays only what has unlocked since. Claims are taken out of `airdropTokens` and revert once it runs out.
 
 ## Fees
 

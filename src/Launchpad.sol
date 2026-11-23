@@ -93,6 +93,7 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         bytes32 salt,
         uint256 minBid,
         uint256 amount,
+        uint256 buyAmount,
         uint256 proofDeadline,
         bytes calldata proof
     ) external returns (bytes32 handleId) {
@@ -103,23 +104,11 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         require(handles[handleId].token == address(0), AlreadyLaunched());
 
         _startAuction(handleId, name, symbol, salt);
-        _bidAuction(handleId, amount);
+        _bidAuction(handleId, amount, buyAmount);
     }
 
-    function bid(bytes32 handleId, uint256 amount) external {
-        _bidAuction(handleId, amount);
-    }
-
-    function prebuy(bytes32 handleId, uint256 amount) external {
-        Handle storage handle = handles[handleId];
-        require(block.timestamp < handle.auction.endTime, AuctionNotActive());
-
-        handle.prebuys[msg.sender] += amount;
-        handle.totalPrebuy += amount;
-
-        emit Prebought(handleId, msg.sender, amount);
-
-        IERC20(usd).safeTransferFrom(msg.sender, address(this), amount);
+    function bid(bytes32 handleId, uint256 amount, uint256 buyAmount) external {
+        _bidAuction(handleId, amount, buyAmount);
     }
 
     function launch(bytes32 handleId) external returns (address token) {
@@ -136,6 +125,7 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
             auction.salt,
             auction.highestBidder,
             address(0),
+            auction.buyAmount,
             auction.startTick
         );
     }
@@ -145,6 +135,7 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         string calldata symbol,
         bytes32 salt,
         uint256 proofDeadline,
+        uint256 buyAmount,
         bytes calldata proof
     ) external returns (address token) {
         _verifyProof(Proofs.launchOwnHash(name, symbol, msg.sender, proofDeadline), proofDeadline, proof);
@@ -158,7 +149,8 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
             _cancelAuction(handleId);
         }
 
-        token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender, tick);
+        IERC20(usd).safeTransferFrom(msg.sender, address(this), buyAmount);
+        token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender, buyAmount, tick);
     }
 
     function confirmCall(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
@@ -180,21 +172,6 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         require(handle.calledAt != 0, NotCalled());
 
         hook.setAccount(handle.token, msg.sender);
-    }
-
-    function claimPrebuy(bytes32 handleId) external returns (uint256 tokens) {
-        Handle storage handle = handles[handleId];
-        address token = handle.token;
-        require(token != address(0), NotLaunched());
-        uint256 amount = handle.prebuys[msg.sender];
-        require(amount != 0, NothingToClaim());
-
-        delete handle.prebuys[msg.sender];
-        tokens = amount * handle.prebuyTokens / handle.totalPrebuy;
-
-        emit PrebuyClaimed(handleId, msg.sender, tokens);
-
-        IERC20(token).safeTransfer(msg.sender, tokens);
     }
 
     function claimAirdrop(bytes32 handleId, bytes32 userId, uint256 amount, uint256 proofDeadline, bytes calldata proof)
@@ -220,10 +197,6 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         emit AirdropClaimed(handleId, userId, msg.sender, tokens);
 
         IERC20(handle.token).safeTransfer(msg.sender, tokens);
-    }
-
-    function prebuyOf(bytes32 handleId, address buyer) external view returns (uint256) {
-        return handles[handleId].prebuys[buyer];
     }
 
     function airdropClaimOf(bytes32 handleId, bytes32 userId) external view returns (uint256) {
@@ -265,13 +238,14 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         emit AuctionStarted(handleId, predictToken(handleId, salt), name, symbol);
     }
 
-    function _bidAuction(bytes32 handleId, uint256 amount) internal {
+    function _bidAuction(bytes32 handleId, uint256 amount, uint256 buyAmount) internal {
         Auction storage auction = handles[handleId].auction;
         uint256 endTime = auction.endTime;
         require(block.timestamp < endTime, AuctionNotActive());
 
         address previousBidder = auction.highestBidder;
         uint256 previousBid = auction.highestBid;
+        uint256 previousBuyAmount = auction.buyAmount;
         uint256 minBid = previousBid + (previousBid * auction.minBidIncrementBps) / BPS;
         require(amount >= minBid, BidTooLow(minBid));
 
@@ -282,17 +256,18 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         }
         auction.highestBidder = msg.sender;
         auction.highestBid = amount;
+        auction.buyAmount = buyAmount;
 
-        emit BidPlaced(handleId, msg.sender, amount, endTime);
+        emit BidPlaced(handleId, msg.sender, amount, buyAmount, endTime);
 
-        IERC20(usd).safeTransferFrom(msg.sender, address(this), amount);
-        if (previousBid != 0) IERC20(usd).safeTransfer(previousBidder, previousBid);
+        IERC20(usd).safeTransferFrom(msg.sender, address(this), amount + buyAmount);
+        if (previousBid != 0) IERC20(usd).safeTransfer(previousBidder, previousBid + previousBuyAmount);
     }
 
     function _cancelAuction(bytes32 handleId) internal {
         Auction storage auction = handles[handleId].auction;
         address bidder = auction.highestBidder;
-        uint256 refund = auction.highestBid;
+        uint256 refund = auction.highestBid + auction.buyAmount;
         delete handles[handleId].auction;
 
         emit AuctionCancelled(handleId, bidder, refund);
@@ -308,6 +283,7 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         bytes32 salt,
         address launcher,
         address account,
+        uint256 buyAmount,
         int24 tick
     ) internal returns (address token) {
         require(handle.token == address(0), AlreadyLaunched());
@@ -324,9 +300,11 @@ contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpg
         handle.token = token;
         handle.launcher = launcher;
         handle.airdropTokens = airdropTokens;
-        handle.prebuyTokens = _provideLiquidity(token, tick, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy, bid);
 
-        emit Launched(handleId, token, launcher, name, symbol, airdropTokens, tick);
+        emit Launched(handleId, token, launcher, name, symbol, airdropTokens, buyAmount, tick);
+
+        uint256 boughtTokens = _provideLiquidity(token, tick, TOKEN_SUPPLY - airdropTokens, buyAmount, bid);
+        if (boughtTokens != 0) IERC20(token).safeTransfer(launcher, boughtTokens);
     }
 
     function _provideLiquidity(address token, int24 tick, uint256 liquidityTokens, uint256 prebuyUsd, uint256 bid)

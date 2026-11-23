@@ -25,7 +25,7 @@ contract LaunchpadTest is LaunchFixture {
 
     function test_UpgradeKeepsAuctionsAndAnnouncedTokenAddresses() public {
         bytes32 handleId = _startAuction("Other", "other");
-        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
         address announced = launchpad.predictToken(handleId, auction.salt);
 
         launchpad.upgradeToAndCall(address(new Launchpad(address(usd), manager, hook)), "");
@@ -55,9 +55,9 @@ contract LaunchpadTest is LaunchFixture {
         bytes memory proof = _startAuctionProof("Other", "other");
         bytes32 salt = _validSalt(keccak256("other"));
 
-        bytes32 handleId = launchpad.startAuction("Other", "other", salt, BID, 2 * BID, block.timestamp, proof);
+        bytes32 handleId = launchpad.startAuction("Other", "other", salt, BID, 2 * BID, 0, block.timestamp, proof);
 
-        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
         assertEq(auction.highestBid, 2 * BID);
     }
 
@@ -66,13 +66,13 @@ contract LaunchpadTest is LaunchFixture {
         bytes32 salt = _validSalt(keccak256("other"));
 
         vm.expectRevert(abi.encodeWithSelector(ILaunchpad.BidTooLow.selector, BID));
-        launchpad.startAuction("Other", "other", salt, BID, BID - 1, block.timestamp, proof);
+        launchpad.startAuction("Other", "other", salt, BID, BID - 1, 0, block.timestamp, proof);
     }
 
     function test_SymbolKeepsItsCaseAndHandleIdIgnoresIt() public {
         bytes32 handleId = _startAuction("Parik Patel", "ParikPatelCFA");
 
-        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
         assertEq(auction.symbol, "ParikPatelCFA");
         assertEq(handleId, keccak256("parikpatelcfa"));
     }
@@ -83,7 +83,7 @@ contract LaunchpadTest is LaunchFixture {
         bytes32 salt = _validSalt(handleId);
 
         vm.expectRevert(ILaunchpad.AuctionAlreadyExists.selector);
-        launchpad.startAuction("Parik Patel", "parikpatelcfa", salt, BID, BID, block.timestamp, proof);
+        launchpad.startAuction("Parik Patel", "parikpatelcfa", salt, BID, BID, 0, block.timestamp, proof);
     }
 
     function test_RunningAuctionKeepsItsBidStepAndExtension() public {
@@ -93,9 +93,9 @@ contract LaunchpadTest is LaunchFixture {
         launchpad.setAuctionSettings(1 hours, 1 hours, 5000);
 
         skip(duration - extension);
-        launchpad.bid(handleId, BID * 11 / 10);
+        launchpad.bid(handleId, BID * 11 / 10, 0);
 
-        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
         assertEq(auction.endTime, block.timestamp + 2 * extension);
     }
 
@@ -108,10 +108,10 @@ contract LaunchpadTest is LaunchFixture {
         skip(launchpad.auctionDuration());
         uint256 airdropTokens = launchpad.TOKEN_SUPPLY() * airdropBps / 10_000;
         vm.expectEmit(true, false, true, true);
-        emit ILaunchpad.Launched(handleId, address(0), address(this), "Other", "other", airdropTokens, startTick);
+        emit ILaunchpad.Launched(handleId, address(0), address(this), "Other", "other", airdropTokens, 0, startTick);
         _trade(launchpad.launch(handleId));
 
-        (,,,,, uint256 keptTokens,) = launchpad.handles(handleId);
+        (,,, uint256 keptTokens,) = launchpad.handles(handleId);
         assertEq(keptTokens, airdropTokens);
         (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
         assertEq(sqrtPriceX96, TickMath.getSqrtPriceAtTick(startTick));
@@ -128,6 +128,56 @@ contract LaunchpadTest is LaunchFixture {
         assertEq(sqrtPriceX96, TickMath.getSqrtPriceAtTick(startTick));
     }
 
+    function test_WinnerReceivesPrebuyTokensAtLaunch() public view {
+        assertGt(IERC20(token).balanceOf(address(this)), 0);
+        assertApproxEqAbs(IERC20(token).balanceOf(address(launchpad)), _airdropTokens(), 1e18);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+    }
+
+    function test_OutbidBidderGetsBidAndPrebuyBack() public {
+        bytes32 handleId = _startAuction("Other", "other", PREBUY);
+        uint256 balance = usd.balanceOf(address(this));
+
+        _bid(handleId, poster, 2 * BID, 0);
+
+        assertEq(usd.balanceOf(address(this)), balance + BID + PREBUY);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
+        assertEq(auction.buyAmount, 0);
+    }
+
+    function test_OnlyTheWinnerPrebuys() public {
+        bytes32 handleId = _startAuction("Other", "other", PREBUY);
+        _bid(handleId, poster, 2 * BID, PREBUY);
+
+        skip(launchpad.auctionDuration());
+        address otherToken = launchpad.launch(handleId);
+
+        assertGt(IERC20(otherToken).balanceOf(poster), 0);
+        assertEq(IERC20(otherToken).balanceOf(address(this)), 0);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+    }
+
+    function test_OwnLaunchOverAnAuctionRefundsBidAndPrebuy() public {
+        _startAuction("Own", "own", PREBUY);
+        uint256 balance = usd.balanceOf(address(this));
+
+        _launchOwn(blogger);
+
+        assertEq(usd.balanceOf(address(this)), balance + BID + PREBUY);
+    }
+
+    function test_OwnerPrebuysAtOwnLaunch() public {
+        usd.mint(blogger, PREBUY);
+        vm.prank(blogger);
+        usd.approve(address(launchpad), PREBUY);
+
+        address ownToken = _launchOwn(blogger, PREBUY);
+
+        assertGt(IERC20(ownToken).balanceOf(blogger), 0);
+        assertEq(usd.balanceOf(blogger), 0);
+        assertEq(usd.balanceOf(address(launchpad)), 0);
+    }
+
     function test_SettingsApplyToAuctionsStartedAfterTheChange() public {
         int24 startTick = launchpad.startTick() + launchpad.TICK_SPACING();
         launchpad.setAuctionSettings(1 hours, 10 minutes, 5000);
@@ -135,7 +185,7 @@ contract LaunchpadTest is LaunchFixture {
 
         bytes32 handleId = _startAuction("Other", "other");
 
-        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,) = launchpad.handles(handleId);
         assertEq(auction.endTime, block.timestamp + 1 hours);
         assertEq(auction.extension, 10 minutes);
         assertEq(auction.minBidIncrementBps, 5000);
@@ -151,7 +201,7 @@ contract LaunchpadTest is LaunchFixture {
         vm.prank(poster);
         launchpad.confirmCall(HANDLE_ID, block.timestamp, proof);
 
-        (,,,,,, uint256 calledAt) = launchpad.handles(HANDLE_ID);
+        (,,,, uint256 calledAt) = launchpad.handles(HANDLE_ID);
         assertEq(calledAt, block.timestamp);
     }
 
@@ -167,7 +217,7 @@ contract LaunchpadTest is LaunchFixture {
         _launchOwn(blogger);
         bytes memory proof = _callProof(OWN_HANDLE_ID);
 
-        (,,,,,, uint256 calledAt) = launchpad.handles(OWN_HANDLE_ID);
+        (,,,, uint256 calledAt) = launchpad.handles(OWN_HANDLE_ID);
         assertEq(calledAt, block.timestamp);
         vm.expectRevert(ILaunchpad.AlreadyCalled.selector);
         launchpad.confirmCall(OWN_HANDLE_ID, block.timestamp, proof);
@@ -200,7 +250,7 @@ contract LaunchpadTest is LaunchFixture {
     function test_OwnLaunchKeepsNoAirdrop() public {
         address ownToken = _launchOwn(blogger);
 
-        (,,,,, uint256 airdropTokens,) = launchpad.handles(OWN_HANDLE_ID);
+        (,,, uint256 airdropTokens,) = launchpad.handles(OWN_HANDLE_ID);
         assertEq(airdropTokens, 0);
         assertApproxEqAbs(IERC20(ownToken).balanceOf(address(manager)), launchpad.TOKEN_SUPPLY(), 1e18);
     }
@@ -273,16 +323,6 @@ contract LaunchpadTest is LaunchFixture {
         assertEq(tokens, 150e18);
         assertEq(IERC20(token).balanceOf(poster), 250e18);
         assertEq(launchpad.airdropClaimOf(HANDLE_ID, USER_ID), 250e18);
-    }
-
-    function test_WholeAirdropCanBeClaimedWithoutTouchingPrebuyTokens() public {
-        (,,,, uint256 prebuyTokens,,) = launchpad.handles(HANDLE_ID);
-        _unlockAirdrop();
-
-        _claimWholeAirdrop();
-
-        assertEq(_airdropTokens(), 0);
-        assertEq(launchpad.claimPrebuy(HANDLE_ID), prebuyTokens);
     }
 
     function test_RevertWhen_AirdropAmountExceedsTheCap() public {
@@ -358,6 +398,14 @@ contract LaunchpadTest is LaunchFixture {
         _claimAirdrop(handleId, userId, account, amount);
     }
 
+    function _bid(bytes32 handleId, address bidder, uint256 amount, uint256 buyAmount) internal {
+        usd.mint(bidder, amount + buyAmount);
+        vm.startPrank(bidder);
+        usd.approve(address(launchpad), amount + buyAmount);
+        launchpad.bid(handleId, amount, buyAmount);
+        vm.stopPrank();
+    }
+
     function _unlockAirdrop() internal {
         _confirmCall(HANDLE_ID);
         skip(launchpad.AIRDROP_UNLOCK_PERIOD());
@@ -371,6 +419,6 @@ contract LaunchpadTest is LaunchFixture {
     }
 
     function _airdropTokens() internal view returns (uint256 airdropTokens) {
-        (,,,,, airdropTokens,) = launchpad.handles(HANDLE_ID);
+        (,,, airdropTokens,) = launchpad.handles(HANDLE_ID);
     }
 }

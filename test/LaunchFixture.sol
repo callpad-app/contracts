@@ -121,17 +121,23 @@ abstract contract LaunchFixture is Test {
     }
 
     function _launchWithPrebuy() internal returns (address) {
-        bytes32 handleId = _startAuction("Handle", "handle");
-        launchpad.prebuy(handleId, PREBUY);
+        bytes32 handleId = _startAuction("Handle", "handle", PREBUY);
         skip(launchpad.auctionDuration());
         return launchpad.launch(handleId);
     }
 
-    function _startAuction(string memory name, string memory symbol) internal returns (bytes32 handleId) {
+    function _startAuction(string memory name, string memory symbol) internal returns (bytes32) {
+        return _startAuction(name, symbol, 0);
+    }
+
+    function _startAuction(string memory name, string memory symbol, uint256 buyAmount)
+        internal
+        returns (bytes32 handleId)
+    {
         handleId = launchpad.handleIdOf(symbol);
         bytes memory proof = _startAuctionProof(name, symbol);
 
-        launchpad.startAuction(name, symbol, _validSalt(handleId), BID, BID, block.timestamp, proof);
+        launchpad.startAuction(name, symbol, _validSalt(handleId), BID, BID, buyAmount, block.timestamp, proof);
     }
 
     function _startAuctionProof(string memory name, string memory symbol) internal view returns (bytes memory) {
@@ -149,6 +155,10 @@ abstract contract LaunchFixture is Test {
     }
 
     function _launchOwn(address owner) internal returns (address) {
+        return _launchOwn(owner, 0);
+    }
+
+    function _launchOwn(address owner, uint256 buyAmount) internal returns (address) {
         string memory name = "Own";
         string memory symbol = "own";
         bytes memory proof = _prove(
@@ -162,7 +172,7 @@ abstract contract LaunchFixture is Test {
         bytes32 salt = _validSalt(keccak256(bytes(symbol)));
 
         vm.prank(owner);
-        return launchpad.launchOwn(name, symbol, salt, block.timestamp, proof);
+        return launchpad.launchOwn(name, symbol, salt, block.timestamp, buyAmount, proof);
     }
 
     function _confirmCall(bytes32 handleId) internal {
