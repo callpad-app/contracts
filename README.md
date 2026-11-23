@@ -95,6 +95,12 @@ The proxy and the hook reference each other, the hook as an immutable, so one of
 PROOF_SIGNER=<address> TREASURY=<address> forge script script/Deploy.s.sol --rpc-url <rpc> --account <keystore> --broadcast
 ```
 
+[`script/Upgrade.s.sol`](script/Upgrade.s.sol) upgrades the Launchpad behind the proxy at `LAUNCHPAD`. It deploys a new implementation with the `usd`, `poolManager` and `hook` read from the proxy and calls `upgradeToAndCall` on it, so it has to be run by the owner. It returns the address of the new implementation. The script does not compare storage layouts: that is on whoever runs it.
+
+```shell
+LAUNCHPAD=<proxy address> forge script script/Upgrade.s.sol --rpc-url <rpc> --account <keystore> --broadcast
+```
+
 ## Development
 
 Requires [Foundry](https://book.getfoundry.sh/).
