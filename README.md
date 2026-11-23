@@ -90,6 +90,12 @@ The Launchpad is an `ERC1967Proxy` over the `Launchpad` implementation (UUPS). T
 
 The proxy and the hook reference each other, the hook as an immutable, so one of the two addresses has to be known before deployment. The hook address must also encode its permissions: `beforeInitialize`, `beforeSwap`, `afterSwap`, `beforeSwapReturnDelta` and `afterSwapReturnDelta`. [`test/LaunchFixture.sol`](test/LaunchFixture.sol) shows the wiring used in tests.
 
+[`script/Deploy.s.sol`](script/Deploy.s.sol) deploys the implementation, the proxy and the hook on Robinhood Chain, over its USDG and Uniswap v4 PoolManager. It predicts the proxy address from the deployer's nonce, mines the hook salt for that address and deploys the hook through the CREATE2 factory. The deployer becomes the owner, `PROOF_SIGNER` and `TREASURY` are addresses taken from the environment. The script returns the addresses of the Launchpad proxy and the hook.
+
+```shell
+PROOF_SIGNER=<address> TREASURY=<address> forge script script/Deploy.s.sol --rpc-url <rpc> --account <keystore> --broadcast
+```
+
 ## Development
 
 Requires [Foundry](https://book.getfoundry.sh/).
