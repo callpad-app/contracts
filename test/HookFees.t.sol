@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {Hook} from "../src/Hook.sol";
-import {Launchpad} from "../src/Launchpad.sol";
+import {IHook} from "../src/interfaces/IHook.sol";
+import {ILaunchpad} from "../src/interfaces/ILaunchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 import {LaunchFixture} from "./LaunchFixture.sol";
 
@@ -37,11 +37,11 @@ contract HookFeesTest is LaunchFixture {
     function test_RevertWhen_NothingToTake() public {
         hook.takeFees();
 
-        vm.expectRevert(Hook.NothingToTake.selector);
+        vm.expectRevert(IHook.NothingToTake.selector);
         hook.takeFees();
 
         vm.prank(blogger);
-        vm.expectRevert(Hook.NothingToTake.selector);
+        vm.expectRevert(IHook.NothingToTake.selector);
         hook.takeFees();
     }
 
@@ -110,7 +110,7 @@ contract HookFeesTest is LaunchFixture {
         bytes memory proof = _accountProof(HANDLE_ID, blogger);
 
         vm.prank(blogger);
-        vm.expectRevert(Launchpad.NotCalled.selector);
+        vm.expectRevert(ILaunchpad.NotCalled.selector);
         launchpad.setAccount(HANDLE_ID, block.timestamp, proof);
     }
 
@@ -119,7 +119,7 @@ contract HookFeesTest is LaunchFixture {
         _setAccount(HANDLE_ID, blogger);
         bytes memory proof = _accountProof(HANDLE_ID, address(this));
 
-        vm.expectRevert(Hook.AccountAlreadySet.selector);
+        vm.expectRevert(IHook.AccountAlreadySet.selector);
         launchpad.setAccount(HANDLE_ID, block.timestamp, proof);
     }
 
@@ -127,7 +127,7 @@ contract HookFeesTest is LaunchFixture {
         _launchOwn(blogger);
         bytes memory proof = _accountProof(OWN_HANDLE_ID, address(this));
 
-        vm.expectRevert(Hook.AccountAlreadySet.selector);
+        vm.expectRevert(IHook.AccountAlreadySet.selector);
         launchpad.setAccount(OWN_HANDLE_ID, block.timestamp, proof);
     }
 

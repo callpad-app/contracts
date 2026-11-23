@@ -13,14 +13,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BaseHook} from "uniswap-hooks/base/BaseHook.sol";
 import {Launchpad} from "./Launchpad.sol";
+import {IHook} from "./interfaces/IHook.sol";
 
-contract Hook is BaseHook {
+contract Hook is IHook, BaseHook {
     using StateLibrary for IPoolManager;
-
-    struct Recipients {
-        address creator;
-        address account;
-    }
 
     uint256 public constant FEE_BPS = 100;
     uint256 public constant TREASURY_SHARE_BPS = 3000;
@@ -32,14 +28,6 @@ contract Hook is BaseHook {
     mapping(address token => Recipients) public recipients;
     mapping(address token => uint256) public escrowedFees;
     mapping(address recipient => uint256) public fees;
-
-    event AccountSet(address indexed token, address indexed account);
-    event FeesTaken(address indexed recipient, uint256 amount);
-    event Swapped(address indexed token, int256 usdAmount, int256 tokenAmount, uint256 fee, uint160 sqrtPriceX96);
-
-    error AccountAlreadySet();
-    error NotLaunchpad();
-    error NothingToTake();
 
     modifier onlyLaunchpad() {
         require(msg.sender == address(launchpad), NotLaunchpad());

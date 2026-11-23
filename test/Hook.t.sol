@@ -6,7 +6,7 @@ import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {BaseHook} from "uniswap-hooks/base/BaseHook.sol";
-import {Hook} from "../src/Hook.sol";
+import {IHook} from "../src/interfaces/IHook.sol";
 import {LaunchFixture} from "./LaunchFixture.sol";
 
 contract HookTest is LaunchFixture {
@@ -18,7 +18,7 @@ contract HookTest is LaunchFixture {
                 CustomRevert.WrappedError.selector,
                 address(hook),
                 IHooks.beforeInitialize.selector,
-                abi.encodeWithSelector(Hook.NotLaunchpad.selector),
+                abi.encodeWithSelector(IHook.NotLaunchpad.selector),
                 abi.encodeWithSelector(Hooks.HookCallFailed.selector)
             )
         );
@@ -26,12 +26,12 @@ contract HookTest is LaunchFixture {
     }
 
     function test_RevertWhen_RegisterCallerIsNotLaunchpad() public {
-        vm.expectRevert(Hook.NotLaunchpad.selector);
+        vm.expectRevert(IHook.NotLaunchpad.selector);
         hook.register(token, address(this), address(this), BID);
     }
 
     function test_RevertWhen_SetAccountCallerIsNotLaunchpad() public {
-        vm.expectRevert(Hook.NotLaunchpad.selector);
+        vm.expectRevert(IHook.NotLaunchpad.selector);
         hook.setAccount(token, address(this));
     }
 

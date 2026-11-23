@@ -15,6 +15,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {Hook} from "../src/Hook.sol";
+import {IHook} from "../src/interfaces/IHook.sol";
 import {Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 
@@ -97,7 +98,7 @@ abstract contract LaunchFixture is Test {
     function _swappedData() internal view returns (bytes memory data) {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i; i < logs.length; ++i) {
-            if (logs[i].topics[0] != Hook.Swapped.selector) continue;
+            if (logs[i].topics[0] != IHook.Swapped.selector) continue;
             assertEq(logs[i].topics[1], bytes32(uint256(uint160(token))));
             data = logs[i].data;
         }

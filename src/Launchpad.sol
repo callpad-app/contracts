@@ -16,35 +16,11 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {SafeCallback} from "v4-periphery/src/base/SafeCallback.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {Hook} from "./Hook.sol";
+import {ILaunchpad} from "./interfaces/ILaunchpad.sol";
 import {Proofs} from "./Proofs.sol";
 import {Token} from "./Token.sol";
 
-struct Auction {
-    string name;
-    string symbol;
-    bytes32 salt;
-    address highestBidder;
-    uint256 highestBid;
-    uint256 endTime;
-    uint256 extension;
-    uint256 minBidIncrementBps;
-    uint256 airdropBps;
-    int24 startTick;
-}
-
-struct Handle {
-    Auction auction;
-    address token;
-    address launcher;
-    uint256 totalPrebuy;
-    uint256 prebuyTokens;
-    uint256 airdropTokens;
-    uint256 calledAt;
-    mapping(address buyer => uint256 amount) prebuys;
-    mapping(bytes32 userId => uint256 amount) airdropClaims;
-}
-
-contract Launchpad is EIP712, Ownable, SafeCallback {
+contract Launchpad is ILaunchpad, EIP712, Ownable, SafeCallback {
     using SafeERC20 for IERC20;
 
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
@@ -64,39 +40,6 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     uint256 public airdropBps = 100;
     int24 public startTick = 391_400;
     mapping(bytes32 handleId => Handle) public handles;
-
-    event ProofSignerUpdated(address proofSigner);
-    event TreasuryUpdated(address treasury);
-    event AuctionSettingsUpdated(uint256 auctionDuration, uint256 auctionExtension, uint256 auctionMinBidIncrementBps);
-    event LaunchSettingsUpdated(uint256 airdropBps, int24 startTick);
-    event AuctionStarted(bytes32 indexed handleId, address indexed token, string name, string symbol);
-    event BidPlaced(bytes32 indexed handleId, address indexed bidder, uint256 amount, uint256 endTime);
-    event AuctionCancelled(bytes32 indexed handleId, address indexed bidder, uint256 refund);
-    event Prebought(bytes32 indexed handleId, address indexed buyer, uint256 amount);
-    event PrebuyClaimed(bytes32 indexed handleId, address indexed buyer, uint256 tokens);
-    event AirdropClaimed(bytes32 indexed handleId, bytes32 indexed userId, address indexed account, uint256 tokens);
-    event CallConfirmed(bytes32 indexed handleId);
-    event Launched(
-        bytes32 indexed handleId,
-        address indexed token,
-        address indexed launcher,
-        string name,
-        string symbol,
-        uint256 airdropTokens,
-        int24 startTick
-    );
-
-    error AirdropCapExceeded();
-    error AlreadyCalled();
-    error AlreadyLaunched();
-    error AuctionAlreadyExists();
-    error AuctionNotActive();
-    error AuctionNotEnded();
-    error BidTooLow(uint256 minBid);
-    error InvalidSalt();
-    error NotCalled();
-    error NotLaunched();
-    error NothingToClaim();
 
     constructor(address proofSigner_, address treasury_, address usd_, IPoolManager poolManager_, Hook hook_)
         EIP712("Callpad", "1")

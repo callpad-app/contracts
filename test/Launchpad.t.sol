@@ -7,7 +7,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {stdError} from "forge-std/StdError.sol";
-import {Auction, Launchpad} from "../src/Launchpad.sol";
+import {ILaunchpad} from "../src/interfaces/ILaunchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 import {LaunchFixture} from "./LaunchFixture.sol";
 
@@ -26,7 +26,7 @@ contract LaunchpadTest is LaunchFixture {
 
         bytes32 handleId = launchpad.startAuction("Other", "other", salt, BID, 2 * BID, block.timestamp, proof);
 
-        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
         assertEq(auction.highestBid, 2 * BID);
     }
 
@@ -34,14 +34,14 @@ contract LaunchpadTest is LaunchFixture {
         bytes memory proof = _startAuctionProof("Other", "other");
         bytes32 salt = _validSalt(keccak256("other"));
 
-        vm.expectRevert(abi.encodeWithSelector(Launchpad.BidTooLow.selector, BID));
+        vm.expectRevert(abi.encodeWithSelector(ILaunchpad.BidTooLow.selector, BID));
         launchpad.startAuction("Other", "other", salt, BID, BID - 1, block.timestamp, proof);
     }
 
     function test_SymbolKeepsItsCaseAndHandleIdIgnoresIt() public {
         bytes32 handleId = _startAuction("Parik Patel", "ParikPatelCFA");
 
-        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
         assertEq(auction.symbol, "ParikPatelCFA");
         assertEq(handleId, keccak256("parikpatelcfa"));
     }
@@ -51,7 +51,7 @@ contract LaunchpadTest is LaunchFixture {
         bytes memory proof = _startAuctionProof("Parik Patel", "parikpatelcfa");
         bytes32 salt = _validSalt(handleId);
 
-        vm.expectRevert(Launchpad.AuctionAlreadyExists.selector);
+        vm.expectRevert(ILaunchpad.AuctionAlreadyExists.selector);
         launchpad.startAuction("Parik Patel", "parikpatelcfa", salt, BID, BID, block.timestamp, proof);
     }
 
@@ -64,7 +64,7 @@ contract LaunchpadTest is LaunchFixture {
         skip(duration - extension);
         launchpad.bid(handleId, BID * 11 / 10);
 
-        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
         assertEq(auction.endTime, block.timestamp + 2 * extension);
     }
 
@@ -77,7 +77,7 @@ contract LaunchpadTest is LaunchFixture {
         skip(launchpad.auctionDuration());
         uint256 airdropTokens = launchpad.TOKEN_SUPPLY() * airdropBps / 10_000;
         vm.expectEmit(true, false, true, true);
-        emit Launchpad.Launched(handleId, address(0), address(this), "Other", "other", airdropTokens, startTick);
+        emit ILaunchpad.Launched(handleId, address(0), address(this), "Other", "other", airdropTokens, startTick);
         _trade(launchpad.launch(handleId));
 
         (,,,,, uint256 keptTokens,) = launchpad.handles(handleId);
@@ -104,7 +104,7 @@ contract LaunchpadTest is LaunchFixture {
 
         bytes32 handleId = _startAuction("Other", "other");
 
-        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
         assertEq(auction.endTime, block.timestamp + 1 hours);
         assertEq(auction.extension, 10 minutes);
         assertEq(auction.minBidIncrementBps, 5000);
@@ -116,7 +116,7 @@ contract LaunchpadTest is LaunchFixture {
         bytes memory proof = _callProof(HANDLE_ID);
 
         vm.expectEmit();
-        emit Launchpad.CallConfirmed(HANDLE_ID);
+        emit ILaunchpad.CallConfirmed(HANDLE_ID);
         vm.prank(poster);
         launchpad.confirmCall(HANDLE_ID, block.timestamp, proof);
 
@@ -128,7 +128,7 @@ contract LaunchpadTest is LaunchFixture {
         _confirmCall(HANDLE_ID);
         bytes memory proof = _callProof(HANDLE_ID);
 
-        vm.expectRevert(Launchpad.AlreadyCalled.selector);
+        vm.expectRevert(ILaunchpad.AlreadyCalled.selector);
         launchpad.confirmCall(HANDLE_ID, block.timestamp, proof);
     }
 
@@ -138,7 +138,7 @@ contract LaunchpadTest is LaunchFixture {
 
         (,,,,,, uint256 calledAt) = launchpad.handles(OWN_HANDLE_ID);
         assertEq(calledAt, block.timestamp);
-        vm.expectRevert(Launchpad.AlreadyCalled.selector);
+        vm.expectRevert(ILaunchpad.AlreadyCalled.selector);
         launchpad.confirmCall(OWN_HANDLE_ID, block.timestamp, proof);
     }
 
@@ -146,7 +146,7 @@ contract LaunchpadTest is LaunchFixture {
         bytes32 handleId = _startAuction("Other", "other");
         bytes memory proof = _callProof(handleId);
 
-        vm.expectRevert(Launchpad.NotLaunched.selector);
+        vm.expectRevert(ILaunchpad.NotLaunched.selector);
         launchpad.confirmCall(handleId, block.timestamp, proof);
     }
 
@@ -207,7 +207,7 @@ contract LaunchpadTest is LaunchFixture {
         uint256 cap = launchpad.AIRDROP_CAP();
         _claimAirdrop(HANDLE_ID, USER_ID, poster, cap);
 
-        vm.expectRevert(Launchpad.NothingToClaim.selector);
+        vm.expectRevert(ILaunchpad.NothingToClaim.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, otherWallet, cap);
     }
 
@@ -224,7 +224,7 @@ contract LaunchpadTest is LaunchFixture {
         uint256 airdropTokens = _airdropTokens();
 
         vm.expectEmit();
-        emit Launchpad.AirdropClaimed(HANDLE_ID, USER_ID, poster, 100e18);
+        emit ILaunchpad.AirdropClaimed(HANDLE_ID, USER_ID, poster, 100e18);
         uint256 tokens = _claimAirdrop(HANDLE_ID, USER_ID, poster, 100e18);
 
         assertEq(tokens, 100e18);
@@ -258,19 +258,19 @@ contract LaunchpadTest is LaunchFixture {
         _unlockAirdrop();
         uint256 amount = launchpad.AIRDROP_CAP() + 1;
 
-        vm.expectRevert(Launchpad.AirdropCapExceeded.selector);
+        vm.expectRevert(ILaunchpad.AirdropCapExceeded.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, poster, amount);
     }
 
     function test_RevertWhen_AirdropIsClaimedBeforeTheCall() public {
-        vm.expectRevert(Launchpad.NotCalled.selector);
+        vm.expectRevert(ILaunchpad.NotCalled.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, poster, 100e18);
     }
 
     function test_RevertWhen_NothingHasUnlockedYet() public {
         _confirmCall(HANDLE_ID);
 
-        vm.expectRevert(Launchpad.NothingToClaim.selector);
+        vm.expectRevert(ILaunchpad.NothingToClaim.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, poster, 100e18);
     }
 
@@ -278,7 +278,7 @@ contract LaunchpadTest is LaunchFixture {
         _unlockAirdrop();
         _claimAirdrop(HANDLE_ID, USER_ID, poster, 100e18);
 
-        vm.expectRevert(Launchpad.NothingToClaim.selector);
+        vm.expectRevert(ILaunchpad.NothingToClaim.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, poster, 100e18);
     }
 
@@ -286,7 +286,7 @@ contract LaunchpadTest is LaunchFixture {
         _unlockAirdrop();
         _claimAirdrop(HANDLE_ID, USER_ID, poster, 100e18);
 
-        vm.expectRevert(Launchpad.NothingToClaim.selector);
+        vm.expectRevert(ILaunchpad.NothingToClaim.selector);
         this.claimAirdropAs(HANDLE_ID, USER_ID, poster, 40e18);
     }
 
