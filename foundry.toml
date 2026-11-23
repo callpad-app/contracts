@@ -2,8 +2,10 @@
 src = "src"
 out = "out"
 libs = ["lib"]
+optimizer = true
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
     "@uniswap/v4-core/=lib/uniswap-hooks/lib/v4-core/",
     "@uniswap/v4-periphery/=lib/uniswap-hooks/lib/v4-periphery/",
 ]

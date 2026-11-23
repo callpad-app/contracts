@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
@@ -17,11 +18,12 @@ contract DeployLocal is Script {
     function run() external {
         vm.startBroadcast();
 
-        address launchpad = vm.computeCreateAddress(msg.sender, vm.getNonce(msg.sender));
+        address launchpad = vm.computeCreateAddress(msg.sender, vm.getNonce(msg.sender) + 1);
         (address hook, bytes32 salt) = HookMiner.find(
             CREATE2_FACTORY, HOOK_FLAGS, type(Hook).creationCode, abi.encode(ROBINHOOD_POOL_MANAGER, launchpad)
         );
-        new Launchpad(msg.sender, msg.sender, ROBINHOOD_USDG, ROBINHOOD_POOL_MANAGER, Hook(hook));
+        address implementation = address(new Launchpad(ROBINHOOD_USDG, ROBINHOOD_POOL_MANAGER, Hook(hook)));
+        new ERC1967Proxy(implementation, abi.encodeCall(Launchpad.initialize, (msg.sender, msg.sender)));
         new Hook{salt: salt}(ROBINHOOD_POOL_MANAGER, Launchpad(launchpad));
 
         vm.stopBroadcast();

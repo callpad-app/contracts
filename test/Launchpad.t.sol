@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -8,6 +10,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {stdError} from "forge-std/StdError.sol";
 import {ILaunchpad} from "../src/interfaces/ILaunchpad.sol";
+import {Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 import {LaunchFixture} from "./LaunchFixture.sol";
 
@@ -19,6 +22,34 @@ contract LaunchpadTest is LaunchFixture {
     address internal poster = makeAddr("poster");
     address internal otherWallet = makeAddr("other wallet");
     address internal blogger = makeAddr("blogger");
+
+    function test_UpgradeKeepsAuctionsAndAnnouncedTokenAddresses() public {
+        bytes32 handleId = _startAuction("Other", "other");
+        (ILaunchpad.Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        address announced = launchpad.predictToken(handleId, auction.salt);
+
+        launchpad.upgradeToAndCall(address(new Launchpad(address(usd), manager, hook)), "");
+
+        skip(launchpad.auctionDuration());
+        assertEq(launchpad.launch(handleId), announced);
+    }
+
+    function test_RevertWhen_StrangerUpgrades() public {
+        address implementation = address(new Launchpad(address(usd), manager, hook));
+
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, poster));
+        vm.prank(poster);
+        launchpad.upgradeToAndCall(implementation, "");
+    }
+
+    function test_RevertWhen_InitializedAgain() public {
+        Launchpad implementation = new Launchpad(address(usd), manager, hook);
+
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        launchpad.initialize(poster, poster);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        implementation.initialize(poster, poster);
+    }
 
     function test_OpeningBidMayExceedProvenMinimum() public {
         bytes memory proof = _startAuctionProof("Other", "other");

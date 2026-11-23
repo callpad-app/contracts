@@ -6,7 +6,7 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 | File | Purpose |
 | --- | --- |
-| [`src/Launchpad.sol`](src/Launchpad.sol) | Handle auctions, prebuys, token deployment, pool initialization and liquidity, admin settings |
+| [`src/Launchpad.sol`](src/Launchpad.sol) | Handle auctions, prebuys, token deployment, pool initialization and liquidity, admin settings. Upgradeable, lives behind a UUPS proxy |
 | [`src/Hook.sol`](src/Hook.sol) | Uniswap v4 hook: restricts pool creation to the Launchpad, takes the swap fee and accounts for fee recipients |
 | [`src/Token.sol`](src/Token.sol) | ERC-20 implementation behind minimal-proxy clones, fixed supply minted once to the Launchpad |
 | [`src/Proofs.sol`](src/Proofs.sol) | EIP-712 struct hashes and signature checks for off-chain proofs |
@@ -74,14 +74,21 @@ Every swap emits `Swapped(token, usdAmount, tokenAmount, fee, sqrtPriceX96)`, wh
 
 ## Roles and trust assumptions
 
-- **Owner** of the Launchpad (`Ownable`) can change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply only to auctions and owner launches that start after them: an auction already in progress keeps the settings it started with, and a launched token is not affected.
+- **Owner** of the Launchpad (`OwnableUpgradeable`) can upgrade the Launchpad to a new implementation and change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply only to auctions and owner launches that start after them: an auction already in progress keeps the settings it started with, and a launched token is not affected.
 - **Proof signer** is trusted to attest handle ownership and calls, and to authorize which handles may be auctioned, under which name and with which minimum opening bid. It also decides who gets how much of each airdrop: the contract caps one `userId` at `AIRDROP_CAP`, the total at the handle's `airdropTokens`, and unlocks the shares over `AIRDROP_UNLOCK_PERIOD` after the call.
 - **Treasury** receives its share of bids and swap fees.
 - The hook accepts `register` and `setAccount` calls only from the Launchpad and allows pool initialization only by the Launchpad.
 
 ## Deployment notes
 
-The Launchpad and the hook reference each other as immutables, so one of the two addresses has to be known before deployment. The hook address must also encode its permissions: `beforeInitialize`, `beforeSwap`, `afterSwap`, `beforeSwapReturnDelta` and `afterSwapReturnDelta`. [`test/LaunchFixture.sol`](test/LaunchFixture.sol) shows the wiring used in tests.
+The Launchpad is an `ERC1967Proxy` over the `Launchpad` implementation (UUPS). The address everyone uses, the hook included, is the address of the proxy.
+
+- The implementation constructor takes `usd`, `poolManager` and `hook` and keeps them as immutables. They live in the code of the implementation, not in the storage of the proxy, so every new implementation has to be deployed with the same three values.
+- `initialize(proofSigner, treasury)` is called once through the proxy, in the transaction that deploys it. It makes the caller the owner, sets the default settings and deploys the token implementation. The token implementation is kept in storage, so token addresses announced in `AuctionStarted` survive an upgrade.
+- `upgradeToAndCall(implementation, data)` is restricted to the owner. A new implementation may only append storage variables after the existing ones.
+- The contract is built with the optimizer on: without it the Launchpad does not fit into the 24,576-byte code size limit.
+
+The proxy and the hook reference each other, the hook as an immutable, so one of the two addresses has to be known before deployment. The hook address must also encode its permissions: `beforeInitialize`, `beforeSwap`, `afterSwap`, `beforeSwapReturnDelta` and `afterSwapReturnDelta`. [`test/LaunchFixture.sol`](test/LaunchFixture.sol) shows the wiring used in tests.
 
 ## Development
 
@@ -100,6 +107,7 @@ Dependencies are git submodules pinned in [`foundry.lock`](foundry.lock):
 | --- | --- |
 | forge-std | v1.17.0 |
 | openzeppelin-contracts | v5.5.0 |
+| openzeppelin-contracts-upgradeable | v5.5.0 |
 | uniswap-hooks | v1.2.1 |
 | v4-periphery | `c6e4754` |
 

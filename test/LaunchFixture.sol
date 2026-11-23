@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
@@ -50,7 +51,14 @@ abstract contract LaunchFixture is Test {
                 )
             )
         );
-        launchpad = new Launchpad(vm.addr(PROOF_SIGNER_KEY), treasury, address(usd), manager, hook);
+        launchpad = Launchpad(
+            address(
+                new ERC1967Proxy(
+                    address(new Launchpad(address(usd), manager, hook)),
+                    abi.encodeCall(Launchpad.initialize, (vm.addr(PROOF_SIGNER_KEY), treasury))
+                )
+            )
+        );
         deployCodeTo("Hook.sol:Hook", abi.encode(manager, launchpad), address(hook));
 
         usd.mint(address(this), 1_000_000e6);

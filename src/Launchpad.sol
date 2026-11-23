@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -20,7 +21,7 @@ import {ILaunchpad} from "./interfaces/ILaunchpad.sol";
 import {Proofs} from "./Proofs.sol";
 import {Token} from "./Token.sol";
 
-contract Launchpad is ILaunchpad, EIP712, Ownable, SafeCallback {
+contract Launchpad is ILaunchpad, EIP712Upgradeable, OwnableUpgradeable, UUPSUpgradeable, SafeCallback {
     using SafeERC20 for IERC20;
 
     uint256 public constant TOKEN_SUPPLY = 1_000_000_000e18;
@@ -31,25 +32,33 @@ contract Launchpad is ILaunchpad, EIP712, Ownable, SafeCallback {
 
     address public immutable usd;
     Hook public immutable hook;
-    address public immutable tokenImplementation = address(new Token());
+    address public tokenImplementation;
     address public proofSigner;
     address public treasury;
-    uint256 public auctionDuration = 24 hours;
-    uint256 public auctionExtension = 5 minutes;
-    uint256 public auctionMinBidIncrementBps = 1000;
-    uint256 public airdropBps = 100;
-    int24 public startTick = 391_400;
+    uint256 public auctionDuration;
+    uint256 public auctionExtension;
+    uint256 public auctionMinBidIncrementBps;
+    uint256 public airdropBps;
+    int24 public startTick;
     mapping(bytes32 handleId => Handle) public handles;
 
-    constructor(address proofSigner_, address treasury_, address usd_, IPoolManager poolManager_, Hook hook_)
-        EIP712("Callpad", "1")
-        Ownable(msg.sender)
-        SafeCallback(poolManager_)
-    {
-        proofSigner = proofSigner_;
-        treasury = treasury_;
+    constructor(address usd_, IPoolManager poolManager_, Hook hook_) SafeCallback(poolManager_) {
         usd = usd_;
         hook = hook_;
+        _disableInitializers();
+    }
+
+    function initialize(address proofSigner_, address treasury_) external initializer {
+        __EIP712_init("Callpad", "1");
+        __Ownable_init(msg.sender);
+        tokenImplementation = address(new Token());
+        proofSigner = proofSigner_;
+        treasury = treasury_;
+        auctionDuration = 24 hours;
+        auctionExtension = 5 minutes;
+        auctionMinBidIncrementBps = 1000;
+        airdropBps = 100;
+        startTick = 391_400;
     }
 
     function setProofSigner(address proofSigner_) external onlyOwner {
@@ -233,6 +242,8 @@ contract Launchpad is ILaunchpad, EIP712, Ownable, SafeCallback {
         token = Clones.predictDeterministicAddress(tokenImplementation, keccak256(abi.encode(handleId, salt)));
         require(token > usd, InvalidSalt());
     }
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     function _verifyProof(bytes32 structHash, uint256 proofDeadline, bytes calldata proof) internal view {
         Proofs.verify(proofSigner, _hashTypedDataV4(structHash), proofDeadline, proof);
