@@ -26,6 +26,10 @@ struct Auction {
     address highestBidder;
     uint256 highestBid;
     uint256 endTime;
+    uint256 extension;
+    uint256 minBidIncrementBps;
+    uint256 airdropBps;
+    int24 startTick;
 }
 
 struct Handle {
@@ -73,7 +77,13 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
     event AirdropClaimed(bytes32 indexed handleId, bytes32 indexed userId, address indexed account, uint256 tokens);
     event CallConfirmed(bytes32 indexed handleId);
     event Launched(
-        bytes32 indexed handleId, address indexed token, address indexed launcher, string name, string symbol
+        bytes32 indexed handleId,
+        address indexed token,
+        address indexed launcher,
+        string name,
+        string symbol,
+        uint256 airdropTokens,
+        int24 startTick
     );
 
     error AirdropCapExceeded();
@@ -166,7 +176,16 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         uint256 endTime = auction.endTime;
         require(endTime != 0 && block.timestamp >= endTime, AuctionNotEnded());
 
-        token = _launch(handle, handleId, auction.name, auction.symbol, auction.salt, auction.highestBidder, address(0));
+        token = _launch(
+            handle,
+            handleId,
+            auction.name,
+            auction.symbol,
+            auction.salt,
+            auction.highestBidder,
+            address(0),
+            auction.startTick
+        );
     }
 
     function launchOwn(
@@ -180,12 +199,14 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         bytes32 handleId = handleIdOf(symbol);
         Handle storage handle = handles[handleId];
+        int24 tick = startTick;
         if (handle.auction.endTime != 0) {
             salt = handle.auction.salt;
+            tick = handle.auction.startTick;
             _cancelAuction(handleId);
         }
 
-        token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender);
+        token = _launch(handle, handleId, name, symbol, salt, msg.sender, msg.sender, tick);
     }
 
     function confirmCall(bytes32 handleId, uint256 proofDeadline, bytes calldata proof) external {
@@ -282,6 +303,10 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         auction.symbol = symbol;
         auction.salt = salt;
         auction.endTime = block.timestamp + auctionDuration;
+        auction.extension = auctionExtension;
+        auction.minBidIncrementBps = auctionMinBidIncrementBps;
+        auction.airdropBps = airdropBps;
+        auction.startTick = startTick;
 
         emit AuctionStarted(handleId, predictToken(handleId, salt), name, symbol);
     }
@@ -293,10 +318,10 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
 
         address previousBidder = auction.highestBidder;
         uint256 previousBid = auction.highestBid;
-        uint256 minBid = previousBid + (previousBid * auctionMinBidIncrementBps) / BPS;
+        uint256 minBid = previousBid + (previousBid * auction.minBidIncrementBps) / BPS;
         require(amount >= minBid, BidTooLow(minBid));
 
-        uint256 extension = auctionExtension;
+        uint256 extension = auction.extension;
         if (endTime - block.timestamp <= extension) {
             endTime += extension;
             auction.endTime = endTime;
@@ -328,7 +353,8 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         string memory symbol,
         bytes32 salt,
         address launcher,
-        address account
+        address account,
+        int24 tick
     ) internal returns (address token) {
         require(handle.token == address(0), AlreadyLaunched());
 
@@ -339,17 +365,17 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
         hook.register(token, launcher, account, bid);
 
         uint256 airdropTokens;
-        if (account == address(0)) airdropTokens = TOKEN_SUPPLY * airdropBps / BPS;
+        if (account == address(0)) airdropTokens = TOKEN_SUPPLY * handle.auction.airdropBps / BPS;
         else handle.calledAt = block.timestamp;
         handle.token = token;
         handle.launcher = launcher;
         handle.airdropTokens = airdropTokens;
-        handle.prebuyTokens = _provideLiquidity(token, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy, bid);
+        handle.prebuyTokens = _provideLiquidity(token, tick, TOKEN_SUPPLY - airdropTokens, handle.totalPrebuy, bid);
 
-        emit Launched(handleId, token, launcher, name, symbol);
+        emit Launched(handleId, token, launcher, name, symbol, airdropTokens, tick);
     }
 
-    function _provideLiquidity(address token, uint256 liquidityTokens, uint256 prebuyUsd, uint256 bid)
+    function _provideLiquidity(address token, int24 tick, uint256 liquidityTokens, uint256 prebuyUsd, uint256 bid)
         internal
         returns (uint256 prebuyTokens)
     {
@@ -360,7 +386,6 @@ contract Launchpad is EIP712, Ownable, SafeCallback {
             tickSpacing: TICK_SPACING,
             hooks: hook
         });
-        int24 tick = startTick;
         poolManager.initialize(key, TickMath.getSqrtPriceAtTick(tick));
 
         return abi.decode(poolManager.unlock(abi.encode(key, tick, liquidityTokens, prebuyUsd, bid)), (uint256));

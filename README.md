@@ -23,14 +23,14 @@ A token launchpad on Uniswap v4. Every handle gets exactly one token. The right 
 
 ### Auction
 
-1. `startAuction(name, symbol, salt, minBid, amount, proofDeadline, proof)` opens an auction for the handle and places the first bid of `amount`, which must be at least `minBid`. The proof covers `name`, `symbol`, `minBid` and the deadline, so one proof is valid for any opening bid from `minBid` up. The auction lasts `auctionDuration` (24 hours by default).
-2. `bid(handleId, amount)` outbids the current highest bid by at least `auctionMinBidIncrementBps` (10% by default). The previous bidder is refunded in the same transaction. A bid placed within the last `auctionExtension` (5 minutes by default) extends the auction by that same interval.
+1. `startAuction(name, symbol, salt, minBid, amount, proofDeadline, proof)` opens an auction for the handle and places the first bid of `amount`, which must be at least `minBid`. The proof covers `name`, `symbol`, `minBid` and the deadline, so one proof is valid for any opening bid from `minBid` up. The auction lasts `auctionDuration` (24 hours by default). The auction also records the settings in force at that moment: `auctionExtension`, `auctionMinBidIncrementBps`, `airdropBps` and `startTick`. They stay with it until launch, whatever the owner changes later.
+2. `bid(handleId, amount)` outbids the current highest bid by at least the auction's bid increment (10% by default). The previous bidder is refunded in the same transaction. A bid placed within the auction's extension (the last 5 minutes by default) extends the auction by that same interval.
 3. `prebuy(handleId, amount)` deposits USD while the auction is active. Prebuys of all buyers are pooled and spent in a single swap at launch.
 4. `launch(handleId)` is callable by anyone once the auction has ended. The highest bidder becomes the creator, the account stays unset.
 
 ### Owner launch
 
-`launchOwn(name, symbol, salt, proofDeadline, proof)` lets the handle owner launch directly. The proof covers `name`, `symbol`, the caller and the deadline. If an auction for the handle is in progress or finished but not yet launched, it is cancelled: the highest bidder is refunded, the auction's salt is reused so the token address announced in `AuctionStarted` stays valid, and existing prebuys are kept. The caller becomes both the creator and the account. The token counts as called from the start: `calledAt` is set at launch, so `confirmCall` reverts with `AlreadyCalled`.
+`launchOwn(name, symbol, salt, proofDeadline, proof)` lets the handle owner launch directly. The proof covers `name`, `symbol`, the caller and the deadline. If an auction for the handle is in progress or finished but not yet launched, it is cancelled: the highest bidder is refunded, the auction's salt is reused so the token address announced in `AuctionStarted` stays valid, its start tick is reused so prebuyers get the price they prebought at, and existing prebuys are kept. An owner launch without an auction uses the current `startTick`. The caller becomes both the creator and the account. The token counts as called from the start: `calledAt` is set at launch, so `confirmCall` reverts with `AlreadyCalled`.
 
 ### Launch
 
@@ -38,9 +38,11 @@ Both paths end in the same steps:
 
 1. The token is deployed as a deterministic clone with salt `keccak256(abi.encode(handleId, salt))` and `TOKEN_SUPPLY` (1,000,000,000 tokens with 18 decimals) is minted to the Launchpad.
 2. The token is registered in the hook together with its creator and account. For auction launches the winning bid is credited as fees: `TREASURY_SHARE_BPS` (30%) to the treasury and the rest to the account, held in escrow until the account is set.
-3. `airdropBps` of the supply (1% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet. An owner launch has no airdrop: its whole supply goes to the pool.
-4. A USD/token pool is initialized at `startTick` with LP fee `0`, tick spacing `200` and the hook. The remaining supply is added as single-sided token liquidity over the range from the minimum usable tick to `startTick`. The position belongs to the Launchpad, which has no function to remove it.
+3. The auction's `airdropBps` of the supply (1% by default) stays in the Launchpad and is recorded as `airdropTokens`, the part of the airdrop that has not been claimed yet. An owner launch has no airdrop: its whole supply goes to the pool.
+4. A USD/token pool is initialized at the start tick with LP fee `0`, tick spacing `200` and the hook. The remaining supply is added as single-sided token liquidity over the range from the minimum usable tick to the start tick. The position belongs to the Launchpad, which has no function to remove it.
 5. The pooled prebuy USD is swapped for tokens in that pool. The swap pays the regular hook fee. The tokens received are recorded as `prebuyTokens`.
+
+`Launched(handleId, token, launcher, name, symbol, airdropTokens, startTick)` reports what the token launched with: the airdrop kept in the Launchpad and the tick the pool started at.
 
 ### After launch
 
@@ -72,7 +74,7 @@ Every swap emits `Swapped(token, usdAmount, tokenAmount, fee, sqrtPriceX96)`, wh
 
 ## Roles and trust assumptions
 
-- **Owner** of the Launchpad (`Ownable`) can change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply to auctions and launches that have not happened yet, including auctions already in progress.
+- **Owner** of the Launchpad (`Ownable`) can change `proofSigner`, `treasury`, the auction settings (`auctionDuration`, `auctionExtension`, `auctionMinBidIncrementBps`) and the launch settings (`airdropBps`, `startTick`). Changes apply only to auctions and owner launches that start after them: an auction already in progress keeps the settings it started with, and a launched token is not affected.
 - **Proof signer** is trusted to attest handle ownership and calls, and to authorize which handles may be auctioned, under which name and with which minimum opening bid. It also decides who gets how much of each airdrop: the contract caps one `userId` at `AIRDROP_CAP`, the total at the handle's `airdropTokens`, and unlocks the shares over `AIRDROP_UNLOCK_PERIOD` after the call.
 - **Treasury** receives its share of bids and swap fees.
 - The hook accepts `register` and `setAccount` calls only from the Launchpad and allows pool initialization only by the Launchpad.

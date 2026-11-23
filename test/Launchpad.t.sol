@@ -3,12 +3,17 @@ pragma solidity ^0.8.30;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {stdError} from "forge-std/StdError.sol";
 import {Auction, Launchpad} from "../src/Launchpad.sol";
 import {Proofs} from "../src/Proofs.sol";
 import {LaunchFixture} from "./LaunchFixture.sol";
 
 contract LaunchpadTest is LaunchFixture {
+    using StateLibrary for IPoolManager;
+
     bytes32 internal constant USER_ID = keccak256("user");
 
     address internal poster = makeAddr("poster");
@@ -48,6 +53,63 @@ contract LaunchpadTest is LaunchFixture {
 
         vm.expectRevert(Launchpad.AuctionAlreadyExists.selector);
         launchpad.startAuction("Parik Patel", "parikpatelcfa", salt, BID, BID, block.timestamp, proof);
+    }
+
+    function test_RunningAuctionKeepsItsBidStepAndExtension() public {
+        uint256 duration = launchpad.auctionDuration();
+        uint256 extension = launchpad.auctionExtension();
+        bytes32 handleId = _startAuction("Other", "other");
+        launchpad.setAuctionSettings(1 hours, 1 hours, 5000);
+
+        skip(duration - extension);
+        launchpad.bid(handleId, BID * 11 / 10);
+
+        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        assertEq(auction.endTime, block.timestamp + 2 * extension);
+    }
+
+    function test_RunningAuctionKeepsItsAirdropAndStartPrice() public {
+        uint256 airdropBps = launchpad.airdropBps();
+        int24 startTick = launchpad.startTick();
+        bytes32 handleId = _startAuction("Other", "other");
+        launchpad.setLaunchSettings(2 * airdropBps, startTick + launchpad.TICK_SPACING());
+
+        skip(launchpad.auctionDuration());
+        uint256 airdropTokens = launchpad.TOKEN_SUPPLY() * airdropBps / 10_000;
+        vm.expectEmit(true, false, true, true);
+        emit Launchpad.Launched(handleId, address(0), address(this), "Other", "other", airdropTokens, startTick);
+        _trade(launchpad.launch(handleId));
+
+        (,,,,, uint256 keptTokens,) = launchpad.handles(handleId);
+        assertEq(keptTokens, airdropTokens);
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
+        assertEq(sqrtPriceX96, TickMath.getSqrtPriceAtTick(startTick));
+    }
+
+    function test_OwnLaunchOverAnAuctionKeepsItsStartPrice() public {
+        int24 startTick = launchpad.startTick();
+        _startAuction("Own", "own");
+        launchpad.setLaunchSettings(launchpad.airdropBps(), startTick + launchpad.TICK_SPACING());
+
+        _trade(_launchOwn(blogger));
+
+        (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
+        assertEq(sqrtPriceX96, TickMath.getSqrtPriceAtTick(startTick));
+    }
+
+    function test_SettingsApplyToAuctionsStartedAfterTheChange() public {
+        int24 startTick = launchpad.startTick() + launchpad.TICK_SPACING();
+        launchpad.setAuctionSettings(1 hours, 10 minutes, 5000);
+        launchpad.setLaunchSettings(500, startTick);
+
+        bytes32 handleId = _startAuction("Other", "other");
+
+        (Auction memory auction,,,,,,) = launchpad.handles(handleId);
+        assertEq(auction.endTime, block.timestamp + 1 hours);
+        assertEq(auction.extension, 10 minutes);
+        assertEq(auction.minBidIncrementBps, 5000);
+        assertEq(auction.airdropBps, 500);
+        assertEq(auction.startTick, startTick);
     }
 
     function test_AnyoneConfirmsTheCallWithAProof() public {
